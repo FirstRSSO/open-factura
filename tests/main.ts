@@ -5,7 +5,7 @@ import {
   generateInvoiceXml,
   getP12FromUrl,
   signXml,
-} from "open-factura";
+} from "../src/index";
 
 const { invoice, accessKey } = generateInvoice({
   infoTributaria: {

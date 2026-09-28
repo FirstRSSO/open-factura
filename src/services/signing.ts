@@ -1,352 +1,215 @@
-import * as forge from "node-forge";
 import { readFileSync } from "fs";
-import fetch from "node-fetch";
+import {
+  signInvoiceXml as ecSignInvoiceXml,
+  signDebitNoteXml as ecSignDebitNoteXml,
+  signCreditNoteXml as ecSignCreditNoteXml,
+  signDeliveryGuideXml as ecSignDeliveryGuideXml,
+  signWithholdingCertificateXml as ecSignWithholdingCertificateXml,
+  XmlFormatError,
+  UnsuportedPkcs12Error,
+  UnsupportedXmlFeatureError,
+  UnsupportedDocumentTypeError,
+} from "ec-sri-invoice-signer";
+// @ts-ignore - internal export for liquidacionCompra support
+import { signDocumentXml as ecSignDocumentXml } from "ec-sri-invoice-signer/dist/src/signature/signature.js";
 
-export function getP12FromLocalFile(path: string) {
-  const file = readFileSync(path);
-  const buffer = file.buffer.slice(
-    file.byteOffset,
-    file.byteOffset + file.byteLength
-  );
-  return buffer;
+export type SignXmlOptions = {
+  pkcs12Password?: string;
+};
+
+export {
+  XmlFormatError,
+  UnsuportedPkcs12Error,
+  UnsupportedXmlFeatureError,
+  UnsupportedDocumentTypeError,
+};
+
+/**
+ * Normaliza los datos del certificado PKCS#12 a Buffer o string base64.
+ */
+export function normalizeP12(
+  p12Data: ArrayBuffer | Buffer | Uint8Array | string
+): Buffer | string {
+  if (typeof p12Data === "string") {
+    return p12Data;
+  }
+  if (Buffer.isBuffer(p12Data)) {
+    return p12Data;
+  }
+  if (p12Data instanceof ArrayBuffer) {
+    return Buffer.from(p12Data);
+  }
+  if (ArrayBuffer.isView(p12Data)) {
+    return Buffer.from(p12Data.buffer, p12Data.byteOffset, p12Data.byteLength);
+  }
+  return Buffer.from(p12Data as any);
 }
 
-export async function getP12FromUrl(url: string) {
-  const file = await fetch(url)
-    .then((response) => response.arrayBuffer())
-    .then((data) => data);
-  return file;
+/**
+ * Limpia namespaces incompatibles (xmlns:ds, xmlns:xsi) del nodo raíz si fueron agregados previamente.
+ */
+function sanitizeXmlForSigner(xml: string): string {
+  return xml
+    .replace(/\s*xmlns:ds="[^"]*"/g, "")
+    .replace(/\s*xmlns:xsi="[^"]*"/g, "");
 }
 
-export function getXMLFromLocalFile(path: string) {
-  const file = readFileSync(path, "utf8");
-  return file;
+/**
+ * Carga un archivo .p12 o .pfx desde el sistema de archivos local.
+ */
+export function getP12FromLocalFile(path: string): Buffer {
+  return readFileSync(path);
 }
 
-export async function getXMLFromLocalUrl(url: string) {
-  const file = await fetch(url)
-    .then((response) => response.text())
-    .then((data) => data);
-  return file;
+/**
+ * Descarga un archivo .p12 o .pfx desde una URL utilizando el fetch nativo de Node.js.
+ */
+export async function getP12FromUrl(
+  url: string,
+  fetchFn: typeof fetch = fetch
+): Promise<Buffer> {
+  const response = await fetchFn(url);
+  if (!response.ok) {
+    throw new Error(
+      `Error al descargar certificado P12: ${response.status} ${response.statusText}`
+    );
+  }
+  const arrayBuffer = await response.arrayBuffer();
+  return Buffer.from(arrayBuffer);
 }
 
-function sha1Base64(text: string, encoding: forge.Encoding = "utf8") {
-  let md = forge.md.sha1.create();
-  md.update(text, encoding);
-  const hash = md.digest().toHex();
-  const buffer = Buffer.from(hash, "hex");
-  const base64 = buffer.toString("base64");
-  return base64;
+/**
+ * Lee un archivo XML local como cadena de texto en codificación UTF-8.
+ */
+export function getXMLFromLocalFile(path: string): string {
+  return readFileSync(path, "utf8");
 }
 
-function hexToBase64(hex: string) {
-  hex = hex.padStart(hex.length + (hex.length % 2), "0");
-  const bytes = hex.match(/.{2}/g)!.map((byte) => parseInt(byte, 16));
-  return btoa(String.fromCharCode(...bytes));
+/**
+ * Descarga un XML desde una URL utilizando fetch nativo.
+ */
+export async function getXMLFromLocalUrl(
+  url: string,
+  fetchFn: typeof fetch = fetch
+): Promise<string> {
+  const response = await fetchFn(url);
+  if (!response.ok) {
+    throw new Error(
+      `Error al descargar XML: ${response.status} ${response.statusText}`
+    );
+  }
+  return await response.text();
 }
 
-function bigIntToBase64(bigInt: number) {
-  const hex = bigInt.toString(16);
-  const hexPairs = hex.match(/\w{2}/g);
-  const bytes = hexPairs!.map((pair) => parseInt(pair, 16));
-  const byteString = String.fromCharCode(...bytes);
-  const base64 = btoa(byteString);
-  const formatedBase64 = base64.match(/.{1,76}/g)!.join("\n");
-  return formatedBase64;
+/**
+ * Firma una Liquidación de Compra XML utilizando ec-sri-invoice-signer.
+ */
+export function signPurchaseLiquidationXml(
+  xml: string,
+  pkcs12Data: ArrayBuffer | Buffer | Uint8Array | string,
+  options?: SignXmlOptions
+): string {
+  const p12 = normalizeP12(pkcs12Data);
+  const sanitized = sanitizeXmlForSigner(xml);
+  return ecSignDocumentXml(sanitized, p12, "liquidacionCompra", options);
 }
 
-function getRandomNumber(min = 990, max = 9999) {
-  return Math.floor(Math.random() * (max - min + 1) + min);
+/**
+ * Firma una Factura XML utilizando ec-sri-invoice-signer.
+ */
+export function signInvoiceXml(
+  xml: string,
+  pkcs12Data: ArrayBuffer | Buffer | Uint8Array | string,
+  options?: SignXmlOptions
+): string {
+  const p12 = normalizeP12(pkcs12Data);
+  const sanitized = sanitizeXmlForSigner(xml);
+  return ecSignInvoiceXml(sanitized, p12, options);
 }
 
+/**
+ * Firma una Nota de Débito XML.
+ */
+export function signDebitNoteXml(
+  xml: string,
+  pkcs12Data: ArrayBuffer | Buffer | Uint8Array | string,
+  options?: SignXmlOptions
+): string {
+  const p12 = normalizeP12(pkcs12Data);
+  const sanitized = sanitizeXmlForSigner(xml);
+  return ecSignDebitNoteXml(sanitized, p12, options);
+}
+
+/**
+ * Firma una Nota de Crédito XML.
+ */
+export function signCreditNoteXml(
+  xml: string,
+  pkcs12Data: ArrayBuffer | Buffer | Uint8Array | string,
+  options?: SignXmlOptions
+): string {
+  const p12 = normalizeP12(pkcs12Data);
+  const sanitized = sanitizeXmlForSigner(xml);
+  return ecSignCreditNoteXml(sanitized, p12, options);
+}
+
+/**
+ * Firma una Guía de Remisión XML.
+ */
+export function signDeliveryGuideXml(
+  xml: string,
+  pkcs12Data: ArrayBuffer | Buffer | Uint8Array | string,
+  options?: SignXmlOptions
+): string {
+  const p12 = normalizeP12(pkcs12Data);
+  const sanitized = sanitizeXmlForSigner(xml);
+  return ecSignDeliveryGuideXml(sanitized, p12, options);
+}
+
+/**
+ * Firma un Comprobante de Retención XML.
+ */
+export function signWithholdingCertificateXml(
+  xml: string,
+  pkcs12Data: ArrayBuffer | Buffer | Uint8Array | string,
+  options?: SignXmlOptions
+): string {
+  const p12 = normalizeP12(pkcs12Data);
+  const sanitized = sanitizeXmlForSigner(xml);
+  return ecSignWithholdingCertificateXml(sanitized, p12, options);
+}
+
+/**
+ * Función principal y retrocompatible de firmado digital XAdES-BES.
+ * Detecta automáticamente el tipo de documento del comprobante.
+ */
 export async function signXml(
-  p12Data: ArrayBuffer,
+  p12Data: ArrayBuffer | Buffer | Uint8Array | string,
   p12Password: string,
   xmlData: string
-) {
-  const arrayBuffer = p12Data;
-  let xml = xmlData;
-  xml = xml.replace(/\s+/g, " ");
-  xml = xml.trim();
-  xml = xml.replace(/(?<=\>)(\r?\n)|(\r?\n)(?=\<\/)/g, "");
-  xml = xml.trim();
-  xml = xml.replace(/(?<=\>)(\s*)/g, "");
+): Promise<string> {
+  const p12 = normalizeP12(p12Data);
+  const sanitizedXml = sanitizeXmlForSigner(xmlData);
 
-  const arrayUint8 = new Uint8Array(arrayBuffer);
-  const base64 = forge.util.binary.base64.encode(arrayUint8);
-  const der = forge.util.decode64(base64);
+  // Detectar la etiqueta raíz del documento XML (e.g. factura, liquidacionCompra, etc.)
+  const match = sanitizedXml.match(/<([a-zA-Z0-9]+)[\s>]/);
+  const rootTag = match ? match[1] : "factura";
+  const options: SignXmlOptions = { pkcs12Password: p12Password };
 
-  const asn1 = forge.asn1.fromDer(der);
-  const p12 = forge.pkcs12.pkcs12FromAsn1(asn1, p12Password);
-  const pkcs8Bags = p12.getBags({
-    bagType: forge.pki.oids.pkcs8ShroudedKeyBag,
-  });
-  const certBags = p12.getBags({
-    bagType: forge.pki.oids.certBag,
-  });
-  const certBag = certBags[(forge as any).oids.certBag];
-
-  const friendlyName = certBag![1].attributes.friendlyName[0];
-
-  let certificate;
-  let pkcs8;
-  let issuerName = "";
-
-  const cert = certBag!.reduce((prev, curr) => {
-    const attributes = curr.cert!.extensions;
-    return attributes.length > prev.cert!.extensions.length ? curr : prev;
-  });
-
-  const issueAttributes = cert.cert!.issuer.attributes;
-
-  issuerName = issueAttributes
-    .reverse()
-    .map((attribute) => {
-      return `${attribute.shortName}=${attribute.value}`;
-    })
-    .join(", ");
-
-  if (/BANCO CENTRAL/i.test(friendlyName)) {
-    let keys = pkcs8Bags[(forge as any).oids.pkcs8ShroudedKeyBag];
-    for (let i = 0; i < keys!.length; i++) {
-      const element = keys![i];
-      let name = element.attributes.friendlyName[0];
-      if (/Signing Key/i.test(name)) {
-        pkcs8 = pkcs8Bags[(forge as any).oids.pkcs8ShroudedKeyBag[i]];
-      }
-    }
+  switch (rootTag) {
+    case "factura":
+      return ecSignInvoiceXml(sanitizedXml, p12, options);
+    case "liquidacionCompra":
+      return ecSignDocumentXml(sanitizedXml, p12, "liquidacionCompra", options);
+    case "notaDebito":
+      return ecSignDebitNoteXml(sanitizedXml, p12, options);
+    case "notaCredito":
+      return ecSignCreditNoteXml(sanitizedXml, p12, options);
+    case "guiaRemision":
+      return ecSignDeliveryGuideXml(sanitizedXml, p12, options);
+    case "comprobanteRetencion":
+      return ecSignWithholdingCertificateXml(sanitizedXml, p12, options);
+    default:
+      return ecSignDocumentXml(sanitizedXml, p12, rootTag, options);
   }
-
-  if (/SECURITY DATA/i.test(friendlyName)) {
-    pkcs8 = pkcs8Bags[(forge as any).oids.pkcs8ShroudedKeyBag]![0];
-  }
-
-  certificate = cert.cert;
-
-  const notBefore = certificate!.validity["notBefore"];
-  const notAfter = certificate!.validity["notAfter"];
-  const date = new Date();
-
-  if (date < notBefore || date > notAfter) {
-    throw new Error("Expired certificate");
-  }
-
-  const key = (pkcs8 as any).key ?? (pkcs8 as any).asn1;
-  const certificateX509_pem = forge.pki.certificateToPem(certificate!);
-
-  let certificateX509 = certificateX509_pem;
-  certificateX509 = certificateX509.substr(certificateX509.indexOf("\n"));
-  certificateX509 = certificateX509.substr(
-    0,
-    certificateX509.indexOf("\n-----END CERTIFICATE-----")
-  );
-
-  certificateX509 = certificateX509
-    .replace(/\r?\n|\r/g, "")
-    .replace(/([^\0]{76})/g, "$1\n");
-
-  const certificateX509_asn1 = forge.pki.certificateToAsn1(certificate!);
-  const certificateX509_der = forge.asn1.toDer(certificateX509_asn1).getBytes();
-  const hash_certificateX509_der = sha1Base64(certificateX509_der, "utf8");
-  const certificateX509_serialNumber = parseInt(certificate!.serialNumber, 16);
-
-  const exponent = hexToBase64(key.e.data[0].toString(16));
-  const modulus = bigIntToBase64(key.n);
-
-  xml = xml.replace(/\t|\r/g, "");
-
-  const sha1_xml = sha1Base64(
-    xml.replace('<?xml version="1.0" encoding="UTF-8"?>', ""),
-    "utf8"
-  );
-
-  const nameSpaces =
-    'xmlns:ds="http://www.w3.org/2000/09/xmldsig#" xmlns:etsi="http://uri.etsi.org/01903/v1.3.2#"';
-
-  const certificateNumber = getRandomNumber();
-  const signatureNumber = getRandomNumber();
-  const signedPropertiesNumber = getRandomNumber();
-  const signedInfoNumber = getRandomNumber();
-  const signedPropertiesIdNumber = getRandomNumber();
-  const referenceIdNumber = getRandomNumber();
-  const signatureValueNumber = getRandomNumber();
-  const objectNumber = getRandomNumber();
-
-  const isoDateTime = date.toISOString().slice(0, 19);
-
-  let signedProperties = "";
-  signedProperties +=
-    '<etsi:SignedProperties Id="Signature' +
-    signatureNumber +
-    "-SignedProperties" +
-    signedPropertiesNumber +
-    '">';
-
-  signedProperties += "<etsi:SignedSignatureProperties>";
-  signedProperties += "<etsi:SigningTime>";
-  signedProperties += isoDateTime;
-  signedProperties += "</etsi:SigningTime>";
-  signedProperties += "<etsi:SigningCertificate>";
-  signedProperties += "<etsi:Cert>";
-  signedProperties += "<etsi:CertDigest>";
-  signedProperties +=
-    '<ds:DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1">';
-  signedProperties += "</ds:DigestMethod>";
-  signedProperties += "<ds:DigestValue>";
-  signedProperties += hash_certificateX509_der;
-  signedProperties += "</ds:DigestValue>";
-  signedProperties += "</etsi:CertDigest>";
-  signedProperties += "<etsi:IssuerSerial>";
-  signedProperties += "<ds:X509IssuerName>";
-  signedProperties += issuerName;
-  signedProperties += "</ds:X509IssuerName>";
-  signedProperties += "<ds:X509SerialNumber>";
-  signedProperties += certificateX509_serialNumber;
-  signedProperties += "</ds:X509SerialNumber>";
-  signedProperties += "</etsi:IssuerSerial>";
-  signedProperties += "</etsi:Cert>";
-  signedProperties += "</etsi:SigningCertificate>";
-  signedProperties += "</etsi:SignedSignatureProperties>";
-
-  signedProperties += "<etsi:SignedDataObjectProperties>";
-  signedProperties +=
-    '<etsi:DataObjectFormat ObjectReference="#Reference-ID=' +
-    referenceIdNumber +
-    '">';
-  signedProperties += "<etsi:Description>";
-  signedProperties += "contenido comprobante";
-  signedProperties += "</etsi:Description>";
-  signedProperties += "<etsi:MimeType>";
-  signedProperties += "text/xml";
-  signedProperties += "</etsi:MimeType>";
-  signedProperties += "</etsi:DataObjectFormat>";
-  signedProperties += "</etsi:SignedDataObjectProperties>";
-  signedProperties += "</etsi:SignedProperties>";
-
-  const sha1SignedProperties = sha1Base64(
-    signedProperties.replace(
-      "<ets:SignedProperties",
-      "<etsi:SignedProperties " + nameSpaces
-    ),
-    "utf8"
-  );
-
-  let keyInfo = "";
-  keyInfo += '<ds:KeyInfo Id="Certificate' + certificateNumber + '">';
-  keyInfo += "\n<ds:X509Data>";
-  keyInfo += "\n<ds:X509Certificate>\n";
-  keyInfo += certificateX509;
-  keyInfo += "\n</ds:X509Certificate>";
-  keyInfo += "\n</ds:X509Data>";
-  keyInfo += "\n<ds:KeyValue>";
-  keyInfo += "\n<ds:RSAKeyValue>";
-  keyInfo += "\n<ds:Modulus>\n";
-  keyInfo += modulus;
-  keyInfo += "\n</ds:Modulus>";
-  keyInfo += "\n<ds:Exponent>\n";
-  keyInfo += exponent;
-  keyInfo += "\n</ds:Exponent>";
-  keyInfo += "\n</ds:RSAKeyValue>";
-  keyInfo += "\n</ds:KeyValue>";
-  keyInfo += "\n</ds:KeyInfo>";
-
-  const sha1KeyInfo = sha1Base64(
-    keyInfo.replace("<ds:KeyInfo", "<ds:KeyInfo " + nameSpaces),
-    "utf8"
-  );
-
-  let signedInfo = "";
-  signedInfo +=
-    '<ds:SignedInfo Id="Signature-SignedInfo' + signedInfoNumber + '">';
-  signedInfo +=
-    '\n<ds:CanonicalizationMethod Algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315">';
-  signedInfo += "</ds:CanonicalizationMethod>";
-  signedInfo +=
-    '\n<ds:SignatureMethod Algorithm="http://www.w3.org/2000/09/xmldsig#rsa-sha1">';
-  signedInfo += "</ds:SignatureMethod>";
-  signedInfo +=
-    '\n<ds:Reference Id="SignedPropertiesID' +
-    signedPropertiesIdNumber +
-    '" Type="http://uri.etsi.org/01903#SignedProperties" URI="#Signature' +
-    signatureNumber +
-    "-SignedProperties" +
-    signedPropertiesNumber +
-    '">';
-  signedInfo +=
-    '\n<ds:DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1">';
-  signedInfo += "</ds:DigestMethod>";
-  signedInfo += "\n<ds:DigestValue>";
-  signedInfo += sha1SignedProperties;
-  signedInfo += "</ds:DigestValue>";
-  signedInfo += "\n</ds:Reference>";
-  signedInfo += '\n<ds:Reference URI="#Certificate' + certificateNumber + '">';
-  signedInfo +=
-    '\n<ds:DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1">';
-  signedInfo += "</ds:DigestMethod>";
-  signedInfo += "\n<ds:DigestValue>";
-  signedInfo += sha1KeyInfo;
-  signedInfo += "</ds:DigestValue>";
-  signedInfo += "\n</ds:Reference>";
-
-  signedInfo +=
-    '\n<ds:Reference Id="Reference-ID' +
-    referenceIdNumber +
-    '" URI="#comprobante">';
-  signedInfo += "\n<ds:Transforms>";
-  signedInfo +=
-    '\n<ds:Transform Algorithm="http://www.w3.org/2000/09/xmlndsig#enveloped-signature">';
-  signedInfo += "</ds:Transform>";
-  signedInfo += "\n</ds:Transforms>";
-  signedInfo +=
-    '\n<ds:DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1">';
-  signedInfo += "</ds:DigestMethod>";
-  signedInfo += "\n<ds:DigestValue>";
-  signedInfo += sha1_xml;
-  signedInfo += "</ds:DigestValue>";
-  signedInfo += "\n</ds:Reference>";
-
-  signedInfo += "\n</ds:SignedInfo>";
-
-  const canonicalizedSignedInfo = signedInfo.replace(
-    "<ds:SignedInfo",
-    "<ds:SignedInfo " + nameSpaces
-  );
-
-  const md = forge.md.sha1.create();
-  md.update(canonicalizedSignedInfo, "utf8");
-
-  const signature = btoa(
-    key
-      .sign(md)
-      .match(/.{1,76}/g)
-      .join("\n")
-  );
-
-  let xadesBes = "";
-  xadesBes +=
-    "<ds:Signature " + nameSpaces + ' Id="Signature' + signatureNumber + '">';
-  xadesBes += "\n" + signedInfo;
-
-  xadesBes +=
-    '\n<ds:SignatureValue Id="SignatureValue' + signatureValueNumber + '">\n';
-
-  xadesBes += signature;
-  xadesBes += "\n</ds:SignatureValue>";
-  xadesBes += "\n" + keyInfo;
-  xadesBes +=
-    '\n<ds:Object Id="Signature' +
-    signatureNumber +
-    "-Object" +
-    objectNumber +
-    '">';
-
-  xadesBes +=
-    '<etsi:QualifyingProperties Target="#Signature' + signatureNumber + '">';
-  xadesBes += signedProperties;
-
-  xadesBes += "</etsi:QualifyingProperties>";
-  xadesBes += "</ds:Object>";
-  xadesBes += "</ds:Signature>";
-
-  return xml.replace(/(<[^<]+)$/, xadesBes + "$1");
 }

@@ -1,8 +1,8 @@
 export type InvoiceInfo = {
   fechaEmision: string;
-  dirEstablecimiento: string;
+  dirEstablecimiento?: string;
   contribuyenteEspecial?: string;
-  obligadoContabilidad: "SI" | "NO";
+  obligadoContabilidad: "SI" | "NO" | string;
   comercioExterior?: string;
   incoTermFactura?: string;
   lugarIncoTerm?: string;
@@ -12,17 +12,18 @@ export type InvoiceInfo = {
   paisDestino?: string;
   paisAdquisicion?: string;
   /*
-  RUC 04
-  CÉDULA 05
-  PASAPORTE 06
-  VENTA A CONSUMIDOR FINAL* 07
-  IDENTIFICACIÓN DELEXTERIOR* 08
+  Tipo Identificación Comprador:
+  04: RUC
+  05: CÉDULA
+  06: PASAPORTE
+  07: CONSUMIDOR FINAL
+  08: IDENTIFICACIÓN DEL EXTERIOR
   */
-  tipoIdentificacionComprador: "04" | "05" | "06" | "07" | "08";
+  tipoIdentificacionComprador: "04" | "05" | "06" | "07" | "08" | string;
   guiaRemision?: string;
   razonSocialComprador: string;
   identificacionComprador: string;
-  direccionComprador: string;
+  direccionComprador?: string;
   totalSinImpuestos: string;
   totalSubsidio?: string;
   incoTermTotalSinImpuestos?: string;
@@ -39,7 +40,7 @@ export type InvoiceInfo = {
   gastosAduaneros?: string;
   gastosTransporteOtros?: string;
   importeTotal: string;
-  moneda: string;
+  moneda?: string;
   placa?: string;
   pagos: Payments;
   valorRetIva?: string;
@@ -48,24 +49,36 @@ export type InvoiceInfo = {
 
 export type TotalWithTax = {
   /*
-  IVA 2
-  ICE 3
-  IRBPNR 5
+  Código de impuesto:
+  2: IVA
+  3: ICE
+  5: IRBPNR
   */
-  codigo: "2" | "3" | "5";
+  codigo: "2" | "3" | "5" | string;
   /*
-  IVA
-  0% 0
-  12% 2
-  14% 3
-  No Objeto de Impuesto 6
-  Exento de IVA 7
-  IVA diferenciado4 8
-
-  ICE - Ver tabla 18 de la ficha tecnica de comprobantes electronicos
+  Código Porcentaje IVA (Tabla 17 Ficha Técnica SRI):
+  0: 0%
+  2: 12%
+  3: 14%
+  4: 15% (vigente)
+  5: 5% (materiales de construcción)
+  6: No Objeto de Impuesto
+  7: Exento de IVA
+  8: IVA diferenciado
+  10: 13%
   */
-  codigoPorcentaje: "0" | "2" | "3" | "6" | "7" | "8";
-  descuentoAdicional: string;
+  codigoPorcentaje:
+    | "0"
+    | "2"
+    | "3"
+    | "4"
+    | "5"
+    | "6"
+    | "7"
+    | "8"
+    | "10"
+    | string;
+  descuentoAdicional?: string;
   baseImponible: string;
   tarifa?: string;
   valor: string;
@@ -89,8 +102,8 @@ export type Compensations = {
 export type Payment = {
   formaPago: string;
   total: string;
-  plazo: string;
-  unidadTiempo: string;
+  plazo?: string;
+  unidadTiempo?: string;
 };
 
 export type Payments = {
@@ -101,32 +114,18 @@ const totalWithTaxes: TotalWithTaxes = {
   totalImpuesto: [
     {
       codigo: "2",
-      codigoPorcentaje: "0",
+      codigoPorcentaje: "4",
       descuentoAdicional: "0.00",
       baseImponible: "50.00",
-      tarifa: "49.50",
-      valor: "50.00",
-      valorDevolucionIva: "50.00",
-    },
-    {
-      codigo: "2",
-      codigoPorcentaje: "0",
-      descuentoAdicional: "0.00",
-      baseImponible: "50.00",
-      tarifa: "49.50",
-      valor: "50.00",
-      valorDevolucionIva: "50.00",
+      tarifa: "15.00",
+      valor: "7.50",
+      valorDevolucionIva: "0.00",
     },
   ],
 };
 
 const compensations: Compensations = {
   compensacion: [
-    {
-      codigo: "1",
-      tarifa: "49.50",
-      valor: "50.00",
-    },
     {
       codigo: "1",
       tarifa: "49.50",
@@ -139,21 +138,15 @@ const payments: Payments = {
   pago: [
     {
       formaPago: "01",
-      total: "50.00",
-      plazo: "50.00",
-      unidadTiempo: "unidadTiempo",
-    },
-    {
-      formaPago: "01",
-      total: "50.00",
-      plazo: "50.00",
-      unidadTiempo: "unidadTiempo",
+      total: "57.50",
+      plazo: "0",
+      unidadTiempo: "dias",
     },
   ],
 };
 
 export const invoiceInfo: InvoiceInfo = {
-  fechaEmision: "01/01/2000",
+  fechaEmision: "01/01/2026",
   dirEstablecimiento: "dirEstablecimiento0",
   contribuyenteEspecial: "contribuyente",
   obligadoContabilidad: "SI",
@@ -180,15 +173,15 @@ export const invoiceInfo: InvoiceInfo = {
   totalImpuestoReembolso: "50.00",
   totalConImpuestos: totalWithTaxes,
   compensaciones: compensations,
-  propina: "50.00",
-  fleteInternacional: "50.00",
-  seguroInternacional: "50.00",
-  gastosAduaneros: "50.00",
-  gastosTransporteOtros: "50.00",
-  importeTotal: "50.00",
-  moneda: "moneda0",
+  propina: "0.00",
+  fleteInternacional: "0.00",
+  seguroInternacional: "0.00",
+  gastosAduaneros: "0.00",
+  gastosTransporteOtros: "0.00",
+  importeTotal: "57.50",
+  moneda: "DOLAR",
   placa: "placa0",
   pagos: payments,
-  valorRetIva: "50.00",
-  valorRetRenta: "50.00",
+  valorRetIva: "0.00",
+  valorRetRenta: "0.00",
 };

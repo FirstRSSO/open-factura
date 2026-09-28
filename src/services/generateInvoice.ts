@@ -1,17 +1,18 @@
-import { create } from "xmlbuilder2";
 import { Invoice, InvoiceInput } from "../baseData/invoice/invoice";
 import { generateAccessKey } from "../utils/utils";
+import { buildXml } from "../utils/xml";
 
-export function generateInvoiceXml(invoice: Invoice) {
-  const document = create(invoice);
-  const xml = document.end({ prettyPrint: true });
-  return xml;
+export function generateInvoiceXml(invoice: Invoice): string {
+  return buildXml(invoice as unknown as Record<string, unknown>);
 }
 
-export function generateInvoice(invoiceData: InvoiceInput) {
+export function generateInvoice(invoiceData: InvoiceInput): {
+  invoice: Invoice;
+  accessKey: string;
+} {
   const accessKey = generateAccessKey({
-    date: new Date(invoiceData.infoFactura.fechaEmision),
-    codDoc: invoiceData.infoTributaria.codDoc,
+    date: invoiceData.infoFactura.fechaEmision,
+    codDoc: invoiceData.infoTributaria.codDoc as any,
     ruc: invoiceData.infoTributaria.ruc,
     environment: invoiceData.infoTributaria.ambiente,
     establishment: invoiceData.infoTributaria.estab,
@@ -21,13 +22,28 @@ export function generateInvoice(invoiceData: InvoiceInput) {
 
   const invoice: Invoice = {
     factura: {
-      "@xmlns:ds": "http://www.w3.org/2000/09/xmldsig#",
-      "@xmlns:xsi": "http://www.w3.org/2001/XMLSchema-instance",
       "@id": "comprobante",
-      "@version": "1.0.0",
+      "@version": invoiceData.version ?? "1.0.0",
       infoTributaria: { ...invoiceData.infoTributaria, claveAcceso: accessKey },
       infoFactura: invoiceData.infoFactura,
       detalles: invoiceData.detalles,
+      ...(invoiceData.reembolsos ? { reembolsos: invoiceData.reembolsos } : {}),
+      ...(invoiceData.retenciones ? { retenciones: invoiceData.retenciones } : {}),
+      ...(invoiceData.infoSustitutivaGuiaRemision
+        ? { infoSustitutivaGuiaRemision: invoiceData.infoSustitutivaGuiaRemision }
+        : {}),
+      ...(invoiceData.otrosRubrosTerceros
+        ? { otrosRubrosTerceros: invoiceData.otrosRubrosTerceros }
+        : {}),
+      ...(invoiceData.tipoNegociable
+        ? { tipoNegociable: invoiceData.tipoNegociable }
+        : {}),
+      ...(invoiceData.maquinaFiscal
+        ? { maquinaFiscal: invoiceData.maquinaFiscal }
+        : {}),
+      ...(invoiceData.infoAdicional
+        ? { infoAdicional: invoiceData.infoAdicional }
+        : {}),
     },
   };
 

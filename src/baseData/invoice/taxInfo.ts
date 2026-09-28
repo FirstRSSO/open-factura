@@ -1,34 +1,39 @@
+export type ContribuyenteRimpe =
+  | "CONTRIBUYENTE RÉGIMEN RIMPE"
+  | "CONTRIBUYENTE NEGOCIO POPULAR - RÉGIMEN RIMPE"
+  | "CONTRIBUYENTE RÉGIMEN RIMPE - EMPRENDEDOR"
+  | "CONTRIBUYENTE RÉGIMEN RIMPE - NEGOCIO POPULAR"
+  | (string & {});
+
 export type TaxInfo = {
   /*
-  pruebas 1
-  produccion 2
+  Ambiente:
+  1: Pruebas
+  2: Producción
   */
   ambiente: "1" | "2";
-  tipoEmision: string;
+  tipoEmision: "1" | string;
   razonSocial: string;
-  nombreComercial: string;
+  nombreComercial?: string;
   ruc: string;
   claveAcceso: string;
   /*
-  FACTURA 01
-  LIQUIDACIÓN DE COMPRA DE
-  BIENES Y PRESTACIÓN DE
-  SERVICIOS 03
-  NOTA DE CRÉDITO 04
-  NOTA DE DÉBITO 05
-  GUÍA DE REMISIÓN 06
-  COMPROBANTE DE RETENCIÓN 07
+  Códigos de comprobante SRI:
+  01: FACTURA
+  03: LIQUIDACIÓN DE COMPRA DE BIENES Y PRESTACIÓN DE SERVICIOS
+  04: NOTA DE CRÉDITO
+  05: NOTA DE DÉBITO
+  06: GUÍA DE REMISIÓN
+  07: COMPROBANTE DE RETENCIÓN
   */
-  codDoc: "01" | "03" | "04" | "05" | "06" | "07";
+  codDoc: "01" | "03" | "04" | "05" | "06" | "07" | string;
   estab: string;
   ptoEmi: string;
   secuencial: string;
   dirMatriz: string;
-  regimenMicroempresas?: "CONTRIBUYENTE RÉGIMEN MICROEMPRESAS";
+  regimenMicroempresas?: "CONTRIBUYENTE RÉGIMEN MICROEMPRESAS" | string;
   agenteRetencion?: string;
-  contribuyenteRimpe?:
-    | "CONTRIBUYENTE NEGOCIO POPULAR - RÉGIMEN RIMPE"
-    | "CONTRIBUYENTE RÉGIMEN RIMPE";
+  contribuyenteRimpe?: ContribuyenteRimpe;
 };
 
 export const taxInfo: TaxInfo = {

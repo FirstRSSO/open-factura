@@ -1,28 +1,28 @@
 {
   "compilerOptions": {
-    "lib": ["ESNext"],
-    "module": "esnext",
-    "target": "esnext",
+    "target": "ES2022",
+    "module": "ESNext",
     "moduleResolution": "node",
-    "noEmit": false,
+    "lib": ["ES2022"],
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "outDir": "./dist",
     "strict": true,
-    "downlevelIteration": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
     "skipLibCheck": true,
-    "jsx": "react-jsx",
+    "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "forceConsistentCasingInFileNames": true,
-    "allowJs": true,
-    "types": [
-      "bun-types" // add Bun global
-    ],
-    "outDir": "./dist",
+    "types": ["node"]
   },
   "include": [
-    "./src/**/*",
-    "./src/services/authorization.ts"
+    "src/**/*"
   ],
   "exclude": [
     "node_modules",
-    "test"
+    "dist",
+    "tests"
   ]
 }

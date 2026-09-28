@@ -15,8 +15,6 @@ import { TaxInfo, taxInfo } from "./taxInfo";
 
 export type Invoice = {
   factura: {
-    "@xmlns:ds": string;
-    "@xmlns:xsi": string;
     "@id": string;
     "@version": string;
     infoTributaria: TaxInfo;
@@ -55,14 +53,13 @@ export type InvoiceInput = {
     serie: string;
   };
   infoAdicional?: AdditionalInfo;
+  version?: string;
 };
 
-export const invoice = {
+export const invoice: Invoice = {
   factura: {
-    "@xmlns:ds": "http://www.w3.org/2000/09/xmldsig#",
-    "@xmlns:xsi": "http://www.w3.org/2001/XMLSchema-instance",
     "@id": "comprobante",
-    "@version": "version0",
+    "@version": "1.0.0",
     infoTributaria: taxInfo,
     infoFactura: invoiceInfo,
     detalles: details,

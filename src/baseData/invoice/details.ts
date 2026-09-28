@@ -8,8 +8,36 @@ export type AdditionalDetails = {
 };
 
 export type Tax = {
-  codigo: string;
-  codigoPorcentaje: string;
+  /*
+  Código de impuesto:
+  2: IVA
+  3: ICE
+  5: IRBPNR
+  */
+  codigo: "2" | "3" | "5" | string;
+  /*
+  Código Porcentaje IVA (Tabla 17 Ficha Técnica SRI):
+  0: 0%
+  2: 12%
+  3: 14%
+  4: 15% (vigente)
+  5: 5% (materiales de construcción)
+  6: No Objeto de Impuesto
+  7: Exento de IVA
+  8: IVA diferenciado
+  10: 13%
+  */
+  codigoPorcentaje:
+    | "0"
+    | "2"
+    | "3"
+    | "4"
+    | "5"
+    | "6"
+    | "7"
+    | "8"
+    | "10"
+    | string;
   tarifa: string;
   baseImponible: string;
   valor: string;
@@ -21,7 +49,7 @@ export type Taxes = {
 
 export type Detail = {
   codigoPrincipal: string;
-  codigoAuxiliar: string;
+  codigoAuxiliar?: string;
   descripcion: string;
   unidadMedida?: string;
   cantidad: string;
@@ -54,17 +82,10 @@ const taxes: Taxes = {
   impuesto: [
     {
       codigo: "2",
-      codigoPorcentaje: "0",
-      tarifa: "49.50",
+      codigoPorcentaje: "4",
+      tarifa: "15.00",
       baseImponible: "50.00",
-      valor: "50.00",
-    },
-    {
-      codigo: "2",
-      codigoPorcentaje: "0",
-      tarifa: "49.50",
-      baseImponible: "50.00",
-      valor: "50.00",
+      valor: "7.50",
     },
   ],
 };

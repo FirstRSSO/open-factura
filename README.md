@@ -1,108 +1,237 @@
-# open-factura
+# open-factura-ec
 
-![Facturación electrónica SRI Ecuador](https://github.com/miguelangarano/open-factura/assets/26367577/75a941b0-dace-4047-91e4-6d0d433dfd39)
+Librería moderna en TypeScript/JavaScript para la facturación electrónica del Servicio de Rentas Internas (**SRI**) de Ecuador, compatible con la Ficha Técnica de Comprobantes Electrónicos v2.1.0 y optimizada para **Node.js 20+**.
 
-Open Factura es un proyecto opensource de facturación electrónica para Ecuador compatible con la ficha técnica para comprobantes electrónicos emitido por el SRI.
+---
 
-Está publicada como [librería en npm](https://www.npmjs.com/package/open-factura) y la puedes utilizar simplemente instalandola como dependencia en tu proyecto de Node o Bun.
+## Novedades en la versión 1.0.0
 
-### Funciones
+- **Soporte Híbrido Completo (ESM + CJS):** Exportaciones duales `./dist/index.mjs` y `./dist/index.cjs` con definiciones de tipos TypeScript `./dist/index.d.ts`.
+- **Eliminación de `node-fetch`:** Utiliza la API nativa global `fetch` de Node.js 20+, eliminando el error `ERR_REQUIRE_ESM`. Permite también inyectar clientes HTTP personalizados.
+- **Eliminación de la dependencia `soap`:** Comunicación SOAP 1.1 directa mediante HTTP POST con sobres XML en texto plano y análisis ultraligero con `fast-xml-parser`. 10x más rápido, sin bloqueos ni caídas por esquemas WSDL inaccesibles.
+- **Firma digital activa con `ec-sri-invoice-signer`:** Reemplazo del motor de firmado antiguo por [`ec-sri-invoice-signer`](https://github.com/bryancalisto/ec-sri-invoice-signer), con compatibilidad total para certificados `.p12` / `.pfx` emitidos en Ecuador (Banco Central, Security Data, Uanataca, ANF, Lazzate, etc.).
+- **Tipado estricto SRI v2.1.0:**
+  - Tarifa de IVA vigente del **15% (código 4)** y 5% (código 5), además de 0%, 12%, 14%, no objeto y exento.
+  - Régimen RIMPE: `"CONTRIBUYENTE RÉGIMEN RIMPE"` y `"CONTRIBUYENTE NEGOCIO POPULAR - RÉGIMEN RIMPE"`.
+  - **Liquidación de Compra de Bienes y Prestación de Servicios (código 03):** modelos, generación de XML y firmado dedicados.
 
-La librería cuenta actualmente con las siguientes funciones:
+---
 
-- Tipado de campos para factura electrónica de acuerdo a las especificaciones del SRI.
-- Generación de archivo JSON con formato de factura electrónica.
-- Generación de XML con formato de factura electrónica.
-- Firmado de XML con archivo .p12 (Compatible con Security Data y Banco Central)
-- Envío de documento a endpoint de recepción del SRI
-- Autorización de documento en endpoint del SRI
-- Cargar Firma electrónica desde archivo local o URL
-- Cargar XML desde archivo local o URL
+## Instalación
 
-### Ejemplo
-
-Aquí puedes ver un ejemplo de cómo utilizar las funciones principales:
-
+```bash
+npm install open-factura-ec
 ```
+
+---
+
+## Uso Rápido
+
+### En ES Modules (import) o CommonJS (require)
+
+```typescript
 import {
   generateInvoice,
   generateInvoiceXml,
-  getP12FromUrl,
   signXml,
-} from "open-factura";
+  documentReception,
+  documentAuthorization,
+  getP12FromLocalFile,
+  SRI_ENDPOINTS,
+  SRI_TAX_CODES,
+  SRI_IVA_PERCENTAGES,
+  SRI_RIMPE_LEGENDS,
+} from "open-factura-ec";
 
-const { invoice, accessKey }  = generateInvoice({
+// 1. Generar la estructura de la Factura y su clave de acceso
+const { invoice, accessKey } = generateInvoice({
   infoTributaria: {
-    ...
+    ambiente: "1", // 1: Pruebas, 2: Producción
+    tipoEmision: "1",
+    razonSocial: "MI EMPRESA S.A.",
+    nombreComercial: "MI TIENDA",
+    ruc: "1790012345001",
+    codDoc: "01", // 01: Factura
+    estab: "001",
+    ptoEmi: "001",
+    secuencial: "000000001",
+    dirMatriz: "Av. Principal 123",
+    contribuyenteRimpe: SRI_RIMPE_LEGENDS.EMPRENDEDOR,
   },
   infoFactura: {
-    ...
+    fechaEmision: "28/09/2026",
+    dirEstablecimiento: "Av. Principal 123",
+    obligadoContabilidad: "NO",
+    tipoIdentificacionComprador: "05", // 05: Cédula, 04: RUC, 07: Consumidor Final
+    razonSocialComprador: "JUAN PEREZ",
+    identificacionComprador: "1712345678",
+    totalSinImpuestos: "100.00",
+    totalDescuento: "0.00",
+    totalConImpuestos: {
+      totalImpuesto: [
+        {
+          codigo: SRI_TAX_CODES.IVA, // "2"
+          codigoPorcentaje: SRI_IVA_PERCENTAGES.IVA_15, // "4" (15% IVA vigente)
+          baseImponible: "100.00",
+          tarifa: "15.00",
+          valor: "15.00",
+        },
+      ],
+    },
+    importeTotal: "115.00",
+    pagos: {
+      pago: [
+        {
+          formaPago: "01", // Sin utilización del sistema financiero
+          total: "115.00",
+        },
+      ],
+    },
   },
   detalles: {
-    ...
-  },
-  reembolsos: {
-    ...
-  },
-  retenciones: {
-    ...
-  },
-  infoSustitutivaGuiaRemision: {
-    ...
-  },
-  otrosRubrosTerceros: {
-    ...
-  },
-  tipoNegociable: { correo: "correo0" },
-  maquinaFiscal: {
-    ...
-  },
-  infoAdicional: {
-    ...
+    detalle: [
+      {
+        codigoPrincipal: "PROD-001",
+        descripcion: "Servicio de Consultoría",
+        cantidad: "1.000000",
+        precioUnitario: "100.000000",
+        descuento: "0.00",
+        precioTotalSinImpuesto: "100.00",
+        impuestos: {
+          impuesto: [
+            {
+              codigo: SRI_TAX_CODES.IVA,
+              codigoPorcentaje: SRI_IVA_PERCENTAGES.IVA_15,
+              tarifa: "15.00",
+              baseImponible: "100.00",
+              valor: "15.00",
+            },
+          ],
+        },
+      },
+    ],
   },
 });
 
+// 2. Generar el XML limpio
 const invoiceXml = generateInvoiceXml(invoice);
 
-const signature: ArrayBuffer = await getP12FromUrl("yoururl");
-const password = "yourpassword";
+// 3. Firmar electrónicamente con el archivo .p12
+const p12Buffer = getP12FromLocalFile("./firma.p12");
+const signedXml = await signXml(p12Buffer, "contraseñaFirma", invoiceXml);
 
-const signedInvoice = await signXml(sign, password, invoiceXml);
-
-const receptionResult = await documentReception(
-  signedInvoice,
-  process.env.SRI_RECEPTION_URL!
+// 4. Enviar a Recepción del SRI (SOAP 1.1)
+const reception = await documentReception(
+  signedXml,
+  SRI_ENDPOINTS.test.reception
 );
+console.log("Estado Recepción:", reception.estado); // "RECIBIDA" o "DEVUELTA"
 
-const authorizationResult = await documentAuthorization(
+// 5. Consultar Autorización en el SRI
+const authorization = await documentAuthorization(
   accessKey,
-  process.env.SRI_AUTHORIZATION_URL!
+  SRI_ENDPOINTS.test.authorization
 );
+console.log("Respuesta Autorización:", authorization);
 ```
 
-Un ejemplo completo lo puedes encontrar en la carpeta `tests`
-Ejemplos de los archivos generados los encuentras en `src/example`
+---
 
-### Endpoints del SRI
+## Liquidación de Compra (código 03)
 
-El SRI ha habilitado dos endpoints para cada ambiente (pruebas, producción).
+```typescript
+import {
+  generatePurchaseLiquidation,
+  generatePurchaseLiquidationXml,
+  signPurchaseLiquidationXml,
+} from "open-factura-ec";
 
-**Producción**
+const { purchaseLiquidation, accessKey } = generatePurchaseLiquidation({
+  infoTributaria: {
+    ambiente: "1",
+    tipoEmision: "1",
+    razonSocial: "EMPRESA COMPRADORA S.A.",
+    ruc: "1790012345001",
+    estab: "001",
+    ptoEmi: "001",
+    secuencial: "000000001",
+    dirMatriz: "Quito, Ecuador",
+  },
+  infoLiquidacionCompra: {
+    fechaEmision: "28/09/2026",
+    obligadoContabilidad: "SI",
+    tipoIdentificacionProveedor: "05",
+    razonSocialProveedor: "PROVEEDOR POPULAR",
+    identificacionProveedor: "1711122233",
+    totalSinImpuestos: "50.00",
+    totalDescuento: "0.00",
+    totalConImpuestos: {
+      totalImpuesto: [
+        {
+          codigo: "2",
+          codigoPorcentaje: "4",
+          baseImponible: "50.00",
+          tarifa: "15.00",
+          valor: "7.50",
+        },
+      ],
+    },
+    importeTotal: "57.50",
+    pagos: {
+      pago: [{ formaPago: "01", total: "57.50" }],
+    },
+  },
+  detalles: {
+    detalle: [
+      {
+        codigoPrincipal: "SER01",
+        descripcion: "Mano de obra artesanal",
+        cantidad: "1.000000",
+        precioUnitario: "50.000000",
+        descuento: "0.00",
+        precioTotalSinImpuesto: "50.00",
+        impuestos: {
+          impuesto: [
+            {
+              codigo: "2",
+              codigoPorcentaje: "4",
+              tarifa: "15.00",
+              baseImponible: "50.00",
+              valor: "7.50",
+            },
+          ],
+        },
+      },
+    ],
+  },
+});
 
+const liquidationXml = generatePurchaseLiquidationXml(purchaseLiquidation);
+const signedLiquidation = signPurchaseLiquidationXml(liquidationXml, p12Buffer, {
+  pkcs12Password: "contraseña",
+});
 ```
-SRI_RECEPTION_URL="https://cel.sri.gob.ec/comprobantes-electronicos-ws/RecepcionComprobantesOffline?wsdl"
-SRI_AUTHORIZATION_URL="https://cel.sri.gob.ec/comprobantes-electronicos-ws/AutorizacionComprobantesOffline?wsdl"
+
+---
+
+## Endpoints Oficiales del SRI
+
+Los endpoints están disponibles en las constantes `SRI_ENDPOINTS`:
+
+```typescript
+import { SRI_ENDPOINTS } from "open-factura-ec";
+
+// Pruebas (Test):
+SRI_ENDPOINTS.test.reception;     // https://celcer.sri.gob.ec/comprobantes-electronicos-ws/RecepcionComprobantesOffline
+SRI_ENDPOINTS.test.authorization; // https://celcer.sri.gob.ec/comprobantes-electronicos-ws/AutorizacionComprobantesOffline
+
+// Producción:
+SRI_ENDPOINTS.production.reception;     // https://cel.sri.gob.ec/comprobantes-electronicos-ws/RecepcionComprobantesOffline
+SRI_ENDPOINTS.production.authorization; // https://cel.sri.gob.ec/comprobantes-electronicos-ws/AutorizacionComprobantesOffline
 ```
 
-**Pruebas**
+---
 
-```
-SRI_RECEPTION_URL="https://celcer.sri.gob.ec/comprobantes-electronicos-ws/RecepcionComprobantesOffline?wsdl"
-SRI_AUTHORIZATION_URL="https://celcer.sri.gob.ec/comprobantes-electronicos-ws/AutorizacionComprobantesOffline?wsdl"
-```
+## Licencia
 
-**Ten en cuenta que para poder utilizar estos endpoints con tu RUC debes activar el ambiente de pruebas/producción en tu cuenta del SRI. [Aquí un tutorial de cómo hacerlo](https://www.factureromovil.com/pasos-para-habilitar-el-ambiente-de-produccion-en-sri)**
-
-### Contribuir
-
-Si deseas contribuir a este proyecto puedes [comprarme un café](https://payp.page.link/SAvm) o Crea un Pull Request con los cambios que pienses que pueden aportar para que el proyecto siga creciendo.
+MIT © 2026
