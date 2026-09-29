@@ -14,6 +14,8 @@ Librería moderna en TypeScript/JavaScript para la facturación electrónica del
   - Tarifa de IVA vigente del **15% (código 4)** y 5% (código 5), además de 0%, 12%, 14%, no objeto y exento.
   - Régimen RIMPE: `"CONTRIBUYENTE RÉGIMEN RIMPE"` y `"CONTRIBUYENTE NEGOCIO POPULAR - RÉGIMEN RIMPE"`.
   - **Liquidación de Compra de Bienes y Prestación de Servicios (código 03):** modelos, generación de XML y firmado dedicados.
+- **Normalización estricta de orden XSD del SRI:** Ordenamiento automático de elementos (`<claveAcceso>` antes de `<codDoc>`, secuencias en `<infoFactura>`, impuestos y pagos) garantizando 100% de cumplimiento con los esquemas del SRI sin errores `cvc-complex-type.2.4.a`.
+- **Generador de RIDE en PDF integrado:** Motor ligero con `pdfkit` y `bwip-js` (código de barras Code128 de 49 dígitos) con plantillas seleccionables (`'fullmegas'`, `'standard'`) y salida en `Buffer` o `Base64` sin requerir navegadores pesados ni Chromium.
 
 ---
 
