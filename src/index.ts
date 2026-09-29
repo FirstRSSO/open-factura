@@ -145,6 +145,21 @@ export {
   GenerateAccessKey,
 } from "./utils/utils";
 
+// Generación de RIDE en PDF (Formatos Fullmegas y Moderno)
+export {
+  generateRidePdf,
+  generateRidePdfBase64,
+  RidePdfOptions,
+  RidePdfTemplate,
+  NormalizedRideData,
+  NormalizedItem,
+  NormalizedTaxTotal,
+  generateBarcodeBuffer,
+  normalizeRideData,
+  renderFullmegasTemplate,
+  renderStandardTemplate,
+} from "./pdf";
+
 // Constantes Oficiales SRI
 export {
   SRI_ENDPOINTS,

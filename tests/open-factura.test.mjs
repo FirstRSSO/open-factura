@@ -448,6 +448,9 @@ describe("6. Paridad y compatibilidad híbrida (CJS y ESM)", () => {
       "parseXml",
       "generateAccessKey",
       "generateVerificatorDigit",
+      "generateRidePdf",
+      "generateRidePdfBase64",
+      "generateBarcodeBuffer",
       "SRI_ENDPOINTS",
       "SRI_DOCUMENT_CODES",
       "SRI_IVA_PERCENTAGES",
@@ -457,5 +460,127 @@ describe("6. Paridad y compatibilidad híbrida (CJS y ESM)", () => {
     for (const key of esmKeys) {
       assert.ok(key in cjs, `La clave '${key}' debe estar exportada en CJS`);
     }
+  });
+});
+
+describe("7. Generación de RIDE en PDF (Plantillas Fullmegas y Standard)", () => {
+  const sampleInvoice = {
+    factura: {
+      "@id": "comprobante",
+      "@version": "1.0.0",
+      infoTributaria: {
+        ambiente: "1",
+        tipoEmision: "1",
+        razonSocial: "EMPRESA DE PRUEBA S.A.",
+        nombreComercial: "FULLMEGAS DISTRIBUIDORA",
+        ruc: "1790012345001",
+        claveAcceso: "2909202601179001234500110010010000000011234567818",
+        codDoc: "01",
+        estab: "001",
+        ptoEmi: "001",
+        secuencial: "000000001",
+        dirMatriz: "Av. Amazonas y Colón",
+        contribuyenteRimpe: "CONTRIBUYENTE RÉGIMEN RIMPE",
+      },
+      infoFactura: {
+        fechaEmision: "29/09/2026",
+        obligadoContabilidad: "SI",
+        tipoIdentificacionComprador: "05",
+        razonSocialComprador: "JUAN PEREZ",
+        identificacionComprador: "1712345678",
+        totalSinImpuestos: "100.00",
+        totalDescuento: "0.00",
+        totalConImpuestos: {
+          totalImpuesto: [
+            {
+              codigo: "2",
+              codigoPorcentaje: "4", // 15%
+              baseImponible: "100.00",
+              tarifa: "15.00",
+              valor: "15.00",
+            },
+          ],
+        },
+        importeTotal: "115.00",
+        moneda: "DOLAR",
+        pagos: {
+          pago: [
+            {
+              formaPago: "01",
+              total: "115.00",
+            },
+          ],
+        },
+      },
+      detalles: {
+        detalle: [
+          {
+            codigoPrincipal: "PROD01",
+            descripcion: "Cable UTP Categoría 6",
+            cantidad: "2.000000",
+            precioUnitario: "50.000000",
+            descuento: "0.00",
+            precioTotalSinImpuesto: "100.00",
+            impuestos: {
+              impuesto: [
+                {
+                  codigo: "2",
+                  codigoPorcentaje: "4",
+                  tarifa: "15.00",
+                  baseImponible: "100.00",
+                  valor: "15.00",
+                },
+              ],
+            },
+          },
+        ],
+      },
+      infoAdicional: {
+        campoAdicional: [
+          {
+            "@nombre": "Email",
+            "#": "cliente@ejemplo.com",
+          },
+        ],
+      },
+    },
+  };
+
+  test("Genera PDF RIDE con plantilla Fullmegas (Buffer válido de PDF)", async () => {
+    const { generateRidePdf } = await import("../dist/index.mjs");
+    const pdfBuffer = await generateRidePdf(sampleInvoice, {
+      template: "fullmegas",
+      authorization: {
+        numeroAutorizacion: "2909202601179001234500110010010000000011234567818",
+        fechaAutorizacion: "29/09/2026 12:00:00",
+      },
+    });
+
+    assert.ok(Buffer.isBuffer(pdfBuffer));
+    assert.ok(pdfBuffer.length > 1000);
+    // Verificar encabezado mágico de PDF '%PDF-'
+    assert.strictEqual(pdfBuffer.subarray(0, 5).toString(), "%PDF-");
+  });
+
+  test("Genera PDF RIDE con plantilla Standard / Moderno", async () => {
+    const { generateRidePdf, generateRidePdfBase64 } = await import("../dist/index.mjs");
+    const pdfBuffer = await generateRidePdf(sampleInvoice, {
+      template: "standard",
+      primaryColor: "#0F766E",
+    });
+
+    assert.ok(Buffer.isBuffer(pdfBuffer));
+    assert.strictEqual(pdfBuffer.subarray(0, 5).toString(), "%PDF-");
+
+    const base64 = await generateRidePdfBase64(sampleInvoice, { template: "standard" });
+    assert.ok(typeof base64 === "string");
+    assert.ok(base64.startsWith("JVBERi")); // Base64 de %PDF-
+  });
+
+  test("Genera PDF RIDE a partir de XML en string", async () => {
+    const { generateInvoiceXml, generateRidePdf } = await import("../dist/index.mjs");
+    const xml = generateInvoiceXml(sampleInvoice);
+    const pdfBuffer = await generateRidePdf(xml, { template: "fullmegas" });
+    assert.strictEqual(pdfBuffer.subarray(0, 5).toString(), "%PDF-");
   });
 });

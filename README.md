@@ -214,6 +214,51 @@ const signedLiquidation = signPurchaseLiquidationXml(liquidationXml, p12Buffer, 
 
 ---
 
+## Generación de RIDE en PDF (Estilos y Plantillas)
+
+La librería incluye un motor nativo y ligero de generación de PDF RIDE (basado en `pdfkit` y `bwip-js`), que genera el código de barras oficial Code128 de 49 dígitos sin requerir Chromium/Puppeteer ni navegadores pesados:
+
+```typescript
+import { generateRidePdf, generateRidePdfBase64 } from "open-factura-ec";
+import fs from "fs";
+
+// Opción 1: Plantilla idéntica a 'Fullmegas' (cajas redondeadas, encabezado doble, diseño clásico)
+const pdfBufferFullmegas = await generateRidePdf(invoice, {
+  template: "fullmegas",
+  logo: fs.readFileSync("./mi-logo.png"), // Opcional
+  authorization: {
+    numeroAutorizacion: "2909202601179001234500110010010000000011234567818",
+    fechaAutorizacion: "29/09/2026 14:30:00",
+    ambiente: "PRODUCCIÓN",
+  },
+});
+
+fs.writeFileSync("./factura-fullmegas.pdf", pdfBufferFullmegas);
+
+// Opción 2: Plantilla Moderna / Estándar (con acentos de color personalizados)
+const pdfBufferStandard = await generateRidePdf(invoice, {
+  template: "standard",
+  primaryColor: "#0D9488", // Color corporativo (Teal, Azul, etc.)
+  logo: "./mi-logo.png",
+});
+
+// Opción 3: Para devolver directamente en APIs REST / JSON (NestJS / Next.js)
+const base64Pdf = await generateRidePdfBase64(invoice, {
+  template: "fullmegas",
+});
+// { pdf: { base64: base64Pdf, filename: "factura.pdf" } }
+
+// Opción 4: Función de renderizado personalizada
+const customPdf = await generateRidePdf(invoice, {
+  template: (doc, data, options) => {
+    doc.text(`Factura personalizada para ${data.comprador.razonSocial}`);
+    // Personalización libre utilizando la API de PDFKit
+  },
+});
+```
+
+---
+
 ## Endpoints Oficiales del SRI
 
 Los endpoints están disponibles en las constantes `SRI_ENDPOINTS`:
@@ -235,3 +280,4 @@ SRI_ENDPOINTS.production.authorization; // https://cel.sri.gob.ec/comprobantes-e
 ## Licencia
 
 MIT © 2026
+

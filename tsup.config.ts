@@ -9,6 +9,7 @@ export default defineConfig({
   splitting: false,
   sourcemap: true,
   clean: true,
+  external: ["pdfkit", "bwip-js"],
   outExtension({ format }) {
     return {
       js: format === "cjs" ? ".cjs" : ".mjs",
