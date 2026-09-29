@@ -1,9 +1,15 @@
 import { Invoice, InvoiceInput } from "../baseData/invoice/invoice";
 import { generateAccessKey } from "../utils/utils";
 import { buildXml } from "../utils/xml";
+import {
+  orderInvoice,
+  orderInfoTributaria,
+  orderInfoFactura,
+} from "../utils/sriOrder";
 
 export function generateInvoiceXml(invoice: Invoice): string {
-  return buildXml(invoice as unknown as Record<string, unknown>);
+  const orderedInvoice = orderInvoice(invoice);
+  return buildXml(orderedInvoice as unknown as Record<string, unknown>);
 }
 
 export function generateInvoice(invoiceData: InvoiceInput): {
@@ -20,12 +26,15 @@ export function generateInvoice(invoiceData: InvoiceInput): {
     sequential: invoiceData.infoTributaria.secuencial,
   });
 
-  const invoice: Invoice = {
+  const rawInvoice: Invoice = {
     factura: {
       "@id": "comprobante",
       "@version": invoiceData.version ?? "1.0.0",
-      infoTributaria: { ...invoiceData.infoTributaria, claveAcceso: accessKey },
-      infoFactura: invoiceData.infoFactura,
+      infoTributaria: orderInfoTributaria({
+        ...invoiceData.infoTributaria,
+        claveAcceso: accessKey,
+      } as any),
+      infoFactura: orderInfoFactura(invoiceData.infoFactura),
       detalles: invoiceData.detalles,
       ...(invoiceData.reembolsos ? { reembolsos: invoiceData.reembolsos } : {}),
       ...(invoiceData.retenciones ? { retenciones: invoiceData.retenciones } : {}),
@@ -47,5 +56,6 @@ export function generateInvoice(invoiceData: InvoiceInput): {
     },
   };
 
+  const invoice = orderInvoice(rawInvoice);
   return { invoice, accessKey };
 }

@@ -125,6 +125,18 @@ export {
   defaultXmlParser,
 } from "./utils/xml";
 
+// Normalización de orden de esquema XSD del SRI
+export {
+  orderInvoice,
+  orderPurchaseLiquidation,
+  orderInfoTributaria,
+  orderInfoFactura,
+  orderDetail,
+  SRI_INFO_TRIBUTARIA_ORDER,
+  SRI_INFO_FACTURA_ORDER,
+  SRI_FACTURA_ROOT_ORDER,
+} from "./utils/sriOrder";
+
 // Utilidades Generales
 export {
   generateAccessKey,

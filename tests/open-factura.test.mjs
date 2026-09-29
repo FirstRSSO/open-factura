@@ -171,6 +171,14 @@ describe("2. Generación de Factura (IVA 15% y Régimen RIMPE)", () => {
     assert.ok(!xml.includes("xmlns:xsi="));
     assert.ok(xml.includes("<contribuyenteRimpe>CONTRIBUYENTE RÉGIMEN RIMPE</contribuyenteRimpe>"));
     assert.ok(xml.includes("<codigoPorcentaje>4</codigoPorcentaje>"));
+
+    // Validar orden estricto XSD de infoTributaria: <ruc> -> <claveAcceso> -> <codDoc>
+    const rucIndex = xml.indexOf("<ruc>");
+    const claveIndex = xml.indexOf("<claveAcceso>");
+    const codDocIndex = xml.indexOf("<codDoc>");
+    assert.ok(rucIndex !== -1 && claveIndex !== -1 && codDocIndex !== -1);
+    assert.ok(rucIndex < claveIndex, "<ruc> debe preceder a <claveAcceso>");
+    assert.ok(claveIndex < codDocIndex, "<claveAcceso> debe preceder estrictamente a <codDoc> según XSD");
   });
 });
 
@@ -253,6 +261,14 @@ describe("3. Generación de Liquidación de Compra (codDoc 03)", () => {
     assert.ok(xml.includes("<tipoIdentificacionProveedor>05</tipoIdentificacionProveedor>"));
     assert.ok(xml.includes("<razonSocialProveedor>CARLOS ARTESANO</razonSocialProveedor>"));
     assert.ok(!xml.includes("xmlns:ds="));
+
+    // Validar orden estricto XSD de infoTributaria en liquidacionCompra
+    const rucIndex = xml.indexOf("<ruc>");
+    const claveIndex = xml.indexOf("<claveAcceso>");
+    const codDocIndex = xml.indexOf("<codDoc>");
+    assert.ok(rucIndex !== -1 && claveIndex !== -1 && codDocIndex !== -1);
+    assert.ok(rucIndex < claveIndex, "<ruc> debe preceder a <claveAcceso>");
+    assert.ok(claveIndex < codDocIndex, "<claveAcceso> debe preceder estrictamente a <codDoc> según XSD");
   });
 });
 

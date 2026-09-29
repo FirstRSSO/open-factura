@@ -4,11 +4,16 @@ import {
 } from "../baseData/purchaseLiquidation/purchaseLiquidation";
 import { generateAccessKey } from "../utils/utils";
 import { buildXml } from "../utils/xml";
+import {
+  orderPurchaseLiquidation,
+  orderInfoTributaria,
+} from "../utils/sriOrder";
 
 export function generatePurchaseLiquidationXml(
   liquidation: PurchaseLiquidation
 ): string {
-  return buildXml(liquidation as unknown as Record<string, unknown>);
+  const orderedLiquidation = orderPurchaseLiquidation(liquidation);
+  return buildXml(orderedLiquidation as unknown as Record<string, unknown>);
 }
 
 export function generatePurchaseLiquidation(
@@ -27,15 +32,15 @@ export function generatePurchaseLiquidation(
     sequential: liquidationData.infoTributaria.secuencial,
   });
 
-  const purchaseLiquidation: PurchaseLiquidation = {
+  const rawPurchaseLiquidation: PurchaseLiquidation = {
     liquidacionCompra: {
       "@id": "comprobante",
       "@version": liquidationData.version ?? "1.0.0",
-      infoTributaria: {
+      infoTributaria: orderInfoTributaria({
         ...liquidationData.infoTributaria,
         codDoc: "03",
         claveAcceso: accessKey,
-      },
+      } as any),
       infoLiquidacionCompra: liquidationData.infoLiquidacionCompra,
       detalles: liquidationData.detalles,
       ...(liquidationData.reembolsos
@@ -53,5 +58,6 @@ export function generatePurchaseLiquidation(
     },
   };
 
+  const purchaseLiquidation = orderPurchaseLiquidation(rawPurchaseLiquidation);
   return { purchaseLiquidation, accessKey };
 }
