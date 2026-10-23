@@ -416,23 +416,46 @@ export async function renderAlternativeTemplate(
     customerBoxLines.push(["DIRECCION", data.comprador.direccion]);
   }
 
+  const customerFontSize = 7.2;
   const customerLineHeight = 13;
+  const customerRowGap = 3;
   const customerColumnGap = 18;
   const customerColumnWidth = (usableWidth - 20 - customerColumnGap) / 2;
-  const customerRows = Math.ceil(customerBoxLines.length / 2);
-  const secondBoxHeight = Math.max(42, customerRows * customerLineHeight + 16);
+
+  // Cada fila crece con su celda más alta: un nombre o dirección largos
+  // ocupan varias líneas y, con un alto fijo, pisaban la fila de abajo.
+  // Se mide en negrita (más ancha que la regular) para no quedarse corto.
+  doc.font("Helvetica-Bold").fontSize(customerFontSize);
+  const customerRowHeights: number[] = [];
+  customerBoxLines.forEach(([label, value], index) => {
+    const row = Math.floor(index / 2);
+    const cellHeight = doc.heightOfString(`${label}: ${value || "-"}`, {
+      width: customerColumnWidth,
+    });
+    customerRowHeights[row] = Math.max(
+      customerRowHeights[row] ?? customerLineHeight - customerRowGap,
+      cellHeight
+    );
+  });
+  const customerRowOffsets: number[] = [];
+  let customerContentHeight = 0;
+  customerRowHeights.forEach((rowHeight, row) => {
+    customerRowOffsets[row] = customerContentHeight;
+    customerContentHeight += rowHeight + customerRowGap;
+  });
+  const secondBoxHeight = Math.max(42, customerContentHeight + 16);
 
   roundedRect(doc, margin, secondBoxY, usableWidth, secondBoxHeight, 10);
-  doc.fontSize(7.2).font("Helvetica").fillColor("#000000");
+  doc.fontSize(customerFontSize).font("Helvetica").fillColor("#000000");
 
   customerBoxLines.forEach(([label, value], index) => {
     const column = index % 2;
     const row = Math.floor(index / 2);
     const x = margin + 10 + column * (customerColumnWidth + customerColumnGap);
-    const y = secondBoxY + 8 + row * customerLineHeight;
+    const y = secondBoxY + 8 + customerRowOffsets[row];
     drawLabelValue(doc, label, value, x, y, {
       width: customerColumnWidth,
-      fontSize: 7.2,
+      fontSize: customerFontSize,
     });
   });
 
