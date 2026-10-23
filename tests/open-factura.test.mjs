@@ -450,6 +450,10 @@ describe("6. Paridad y compatibilidad híbrida (CJS y ESM)", () => {
       "generateVerificatorDigit",
       "generateRidePdf",
       "generateRidePdfBase64",
+      "setDefaultRideTemplate",
+      "getDefaultRideTemplate",
+      "renderAlternativeTemplate",
+      "renderStandardTemplate",
       "generateBarcodeBuffer",
       "SRI_ENDPOINTS",
       "SRI_DOCUMENT_CODES",
@@ -463,7 +467,7 @@ describe("6. Paridad y compatibilidad híbrida (CJS y ESM)", () => {
   });
 });
 
-describe("7. Generación de RIDE en PDF (Plantillas Fullmegas y Standard)", () => {
+describe("7. Generación de RIDE en PDF (Plantillas Alternativa y Standard)", () => {
   const sampleInvoice = {
     factura: {
       "@id": "comprobante",
@@ -472,7 +476,7 @@ describe("7. Generación de RIDE en PDF (Plantillas Fullmegas y Standard)", () =
         ambiente: "1",
         tipoEmision: "1",
         razonSocial: "EMPRESA DE PRUEBA S.A.",
-        nombreComercial: "FULLMEGAS DISTRIBUIDORA",
+        nombreComercial: "DISTRIBUIDORA DE PRUEBA",
         ruc: "1790012345001",
         claveAcceso: "2909202601179001234500110010010000000011234567818",
         codDoc: "01",
@@ -546,10 +550,10 @@ describe("7. Generación de RIDE en PDF (Plantillas Fullmegas y Standard)", () =
     },
   };
 
-  test("Genera PDF RIDE con plantilla Fullmegas (Buffer válido de PDF)", async () => {
+  test("Genera PDF RIDE con plantilla Alternativa (Buffer válido de PDF)", async () => {
     const { generateRidePdf } = await import("../dist/index.mjs");
     const pdfBuffer = await generateRidePdf(sampleInvoice, {
-      template: "fullmegas",
+      template: "alternative",
       authorization: {
         numeroAutorizacion: "2909202601179001234500110010010000000011234567818",
         fechaAutorizacion: "29/09/2026 12:00:00",
@@ -560,6 +564,13 @@ describe("7. Generación de RIDE en PDF (Plantillas Fullmegas y Standard)", () =
     assert.ok(pdfBuffer.length > 1000);
     // Verificar encabezado mágico de PDF '%PDF-'
     assert.strictEqual(pdfBuffer.subarray(0, 5).toString(), "%PDF-");
+
+    // Probar también con el identificador en español "alternativo"
+    const pdfBufferEs = await generateRidePdf(sampleInvoice, {
+      template: "alternativo",
+    });
+    assert.ok(Buffer.isBuffer(pdfBufferEs));
+    assert.strictEqual(pdfBufferEs.subarray(0, 5).toString(), "%PDF-");
   });
 
   test("Genera PDF RIDE con plantilla Standard / Moderno", async () => {
@@ -577,10 +588,44 @@ describe("7. Generación de RIDE en PDF (Plantillas Fullmegas y Standard)", () =
     assert.ok(base64.startsWith("JVBERi")); // Base64 de %PDF-
   });
 
-  test("Genera PDF RIDE a partir de XML en string", async () => {
+  test("Genera PDF RIDE a partir de XML en string con plantilla alternativa", async () => {
     const { generateInvoiceXml, generateRidePdf } = await import("../dist/index.mjs");
     const xml = generateInvoiceXml(sampleInvoice);
-    const pdfBuffer = await generateRidePdf(xml, { template: "fullmegas" });
+    const pdfBuffer = await generateRidePdf(xml, { template: "alternative" });
     assert.strictEqual(pdfBuffer.subarray(0, 5).toString(), "%PDF-");
+  });
+
+  test("Configuración dinámica de plantilla por defecto (setDefaultRideTemplate / getDefaultRideTemplate)", async () => {
+    const {
+      generateRidePdf,
+      setDefaultRideTemplate,
+      getDefaultRideTemplate,
+    } = await import("../dist/index.mjs");
+
+    // Por defecto es standard
+    assert.strictEqual(getDefaultRideTemplate(), "standard");
+
+    // Generar con plantilla por defecto de la librería (standard)
+    const pdfStandardDefault = await generateRidePdf(sampleInvoice);
+    assert.ok(Buffer.isBuffer(pdfStandardDefault));
+    assert.strictEqual(pdfStandardDefault.subarray(0, 5).toString(), "%PDF-");
+
+    // Cambiar plantilla por defecto al estilo alternativo
+    setDefaultRideTemplate("alternative");
+    assert.strictEqual(getDefaultRideTemplate(), "alternative");
+
+    // Generar sin especificar template -> ahora usa el estilo alternativo
+    const pdfAlternativeDefault = await generateRidePdf(sampleInvoice);
+    assert.ok(Buffer.isBuffer(pdfAlternativeDefault));
+    assert.strictEqual(pdfAlternativeDefault.subarray(0, 5).toString(), "%PDF-");
+
+    // Sobrescribir explícitamente a standard
+    const pdfOverrideStandard = await generateRidePdf(sampleInvoice, { template: "standard" });
+    assert.ok(Buffer.isBuffer(pdfOverrideStandard));
+    assert.strictEqual(pdfOverrideStandard.subarray(0, 5).toString(), "%PDF-");
+
+    // Restaurar por defecto de la librería
+    setDefaultRideTemplate("standard");
+    assert.strictEqual(getDefaultRideTemplate(), "standard");
   });
 });

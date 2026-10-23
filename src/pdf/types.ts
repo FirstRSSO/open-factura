@@ -4,8 +4,10 @@ import { PurchaseLiquidation } from "../baseData/purchaseLiquidation/purchaseLiq
 
 export type RidePdfTemplate =
   | "standard"
-  | "fullmegas"
+  | "alternative"
+  | "alternativo"
   | "modern"
+  | "fullmegas"
   | ((
       doc: PDFKit.PDFDocument,
       data: NormalizedRideData,
@@ -15,10 +17,10 @@ export type RidePdfTemplate =
 export interface RidePdfOptions {
   /**
    * Estilo o plantilla a utilizar.
-   * - 'fullmegas': Formato idéntico al proyecto Fullmegas (cajas redondeadas, encabezado doble, tabla clásica).
-   * - 'standard' / 'modern': Formato moderno, limpio y profesional con acentos de color.
+   * - 'standard' / 'modern': Formato moderno con banner de acento y diseño limpio institucional (por defecto).
+   * - 'alternative' / 'alternativo': Formato alternativo (cajas redondeadas con radio 10, encabezado azul '#0d6efd', datos de cliente en dos columnas, tabla sin bordes internos y caja de totales con división 60/40).
    * - O una función personalizada (doc, data, options) => void.
-   * @default 'standard'
+   * @default 'standard' (configurable globalmente vía setDefaultRideTemplate)
    */
   template?: RidePdfTemplate;
 
@@ -28,8 +30,8 @@ export interface RidePdfOptions {
   logo?: Buffer | string;
 
   /**
-   * Color primario para acentos en plantillas compatibles (Hexadecimal, ej. '#1A365D').
-   * @default '#2563EB'
+   * Color primario para acentos en plantillas compatibles (Hexadecimal, ej. '#0d6efd' en alternative o '#1E3A8A' en standard).
+   * @default '#0d6efd' para alternative, '#1E3A8A' para standard
    */
   primaryColor?: string;
 
@@ -43,16 +45,22 @@ export interface RidePdfOptions {
   };
 
   /**
-   * Opciones adicionales del emisor / empresa.
+   * Opciones adicionales del emisor / empresa (compatibles con Fullmegas y personalización avanzada).
    */
   companyData?: {
     logoWidth?: number;
     logoHeight?: number;
     contribuyenteEspecial?: string;
     agenteRetencion?: string;
+    agenteRetencionResolucion?: string;
     regimenRimpe?: boolean | string;
     headerText?: string;
+    infoText?: string;
+    termsText?: string;
     footerText?: string;
+    showDueDate?: boolean;
+    showRemissionGuide?: boolean;
+    invoicePdfTemplate?: any;
   };
 }
 

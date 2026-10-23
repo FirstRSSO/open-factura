@@ -1,17 +1,35 @@
 import PDFDocument from "pdfkit";
 import { Invoice } from "../baseData/invoice/invoice";
 import { PurchaseLiquidation } from "../baseData/purchaseLiquidation/purchaseLiquidation";
-import { RidePdfOptions } from "./types";
+import { RidePdfOptions, RidePdfTemplate } from "./types";
 import { normalizeRideData } from "./normalizer";
-import { renderFullmegasTemplate } from "./templates/fullmegas";
+import { renderAlternativeTemplate } from "./templates/alternative";
 import { renderStandardTemplate } from "./templates/standard";
+
+let globalDefaultRideTemplate: RidePdfTemplate = "standard";
+
+/**
+ * Configura la plantilla predeterminada globalmente para la generación de RIDE en PDF.
+ * Permite mantener 'standard' (por defecto de la librería) o cambiar a 'alternative' / 'alternativo'
+ * de manera global para toda la aplicación.
+ */
+export function setDefaultRideTemplate(template: RidePdfTemplate): void {
+  globalDefaultRideTemplate = template;
+}
+
+/**
+ * Retorna la plantilla predeterminada actual.
+ */
+export function getDefaultRideTemplate(): RidePdfTemplate {
+  return globalDefaultRideTemplate;
+}
 
 /**
  * Genera el documento RIDE en formato PDF (Buffer) a partir de una Factura,
  * Liquidación de Compra, o un XML firmado/autorizado del SRI.
  *
  * @param document Objeto Invoice, PurchaseLiquidation o XML string del comprobante.
- * @param options Opciones de configuración, incluyendo la selección de plantilla ('fullmegas' | 'standard' | función personalizada).
+ * @param options Opciones de configuración, incluyendo la selección de plantilla ('standard' | 'alternative' | 'alternativo' | función personalizada).
  * @returns Buffer con el contenido binario del PDF.
  */
 export async function generateRidePdf(
@@ -19,7 +37,7 @@ export async function generateRidePdf(
   options?: RidePdfOptions
 ): Promise<Buffer> {
   const normalizedData = normalizeRideData(document, options);
-  const templateChoice = options?.template || "standard";
+  const templateChoice = options?.template || globalDefaultRideTemplate;
 
   return new Promise<Buffer>((resolve, reject) => {
     try {
@@ -42,8 +60,12 @@ export async function generateRidePdf(
       const runTemplate = async () => {
         if (typeof templateChoice === "function") {
           await templateChoice(doc, normalizedData, options || {});
-        } else if (templateChoice === "fullmegas") {
-          await renderFullmegasTemplate(doc, normalizedData, options || {});
+        } else if (
+          templateChoice === "alternative" ||
+          templateChoice === "alternativo" ||
+          templateChoice === "fullmegas"
+        ) {
+          await renderAlternativeTemplate(doc, normalizedData, options || {});
         } else {
           // 'standard' o 'modern'
           await renderStandardTemplate(doc, normalizedData, options || {});

@@ -15,7 +15,7 @@ Librería moderna en TypeScript/JavaScript para la facturación electrónica del
   - Régimen RIMPE: `"CONTRIBUYENTE RÉGIMEN RIMPE"` y `"CONTRIBUYENTE NEGOCIO POPULAR - RÉGIMEN RIMPE"`.
   - **Liquidación de Compra de Bienes y Prestación de Servicios (código 03):** modelos, generación de XML y firmado dedicados.
 - **Normalización estricta de orden XSD del SRI:** Ordenamiento automático de elementos (`<claveAcceso>` antes de `<codDoc>`, secuencias en `<infoFactura>`, impuestos y pagos) garantizando 100% de cumplimiento con los esquemas del SRI sin errores `cvc-complex-type.2.4.a`.
-- **Generador de RIDE en PDF integrado:** Motor ligero con `pdfkit` y `bwip-js` (código de barras Code128 de 49 dígitos) con plantillas seleccionables (`'fullmegas'`, `'standard'`) y salida en `Buffer` o `Base64` sin requerir navegadores pesados ni Chromium.
+- **Generador de RIDE en PDF integrado:** Motor ligero con `pdfkit` y `bwip-js` (código de barras Code128 de 49 dígitos) con plantillas seleccionables (`'standard'`, `'alternative'` / `'alternativo'`) y salida en `Buffer` o `Base64` sin requerir navegadores pesados ni Chromium.
 
 ---
 
@@ -218,15 +218,24 @@ const signedLiquidation = signPurchaseLiquidationXml(liquidationXml, p12Buffer, 
 
 ## Generación de RIDE en PDF (Estilos y Plantillas)
 
-La librería incluye un motor nativo y ligero de generación de PDF RIDE (basado en `pdfkit` y `bwip-js`), que genera el código de barras oficial Code128 de 49 dígitos sin requerir Chromium/Puppeteer ni navegadores pesados:
+La librería incluye un motor nativo y ligero de generación de PDF RIDE (basado en `pdfkit` y `bwip-js`), que genera el código de barras oficial Code128 de 49 dígitos sin requerir Chromium/Puppeteer ni navegadores pesados.
+
+Soporta dos estilos completos y listos para producción:
+1. **`'standard'`**: Estilo predeterminado de la librería, moderno y limpio con banner superior institucional y paleta configurable.
+2. **`'alternative'`** (o **`'alternativo'`**): Estilo alternativo profesional, con cajas redondeadas (radio 10), banner superior `#0d6efd`, alturas sincronizadas, datos del comprador a dos columnas, tabla sin bordes internos y caja de totales con división 60/40.
 
 ```typescript
-import { generateRidePdf, generateRidePdfBase64 } from "open-factura-ec";
+import {
+  generateRidePdf,
+  generateRidePdfBase64,
+  setDefaultRideTemplate,
+  getDefaultRideTemplate,
+} from "open-factura-ec";
 import fs from "fs";
 
-// Opción 1: Plantilla idéntica a 'Fullmegas' (cajas redondeadas, encabezado doble, diseño clásico)
-const pdfBufferFullmegas = await generateRidePdf(invoice, {
-  template: "fullmegas",
+// Opción 1: Plantilla con estilo Alternativo (cajas redondeadas, encabezado doble, tabla limpia)
+const pdfBufferAlt = await generateRidePdf(invoice, {
+  template: "alternative", // o 'alternativo'
   logo: fs.readFileSync("./mi-logo.png"), // Opcional
   authorization: {
     numeroAutorizacion: "2909202601179001234500110010010000000011234567818",
@@ -235,7 +244,7 @@ const pdfBufferFullmegas = await generateRidePdf(invoice, {
   },
 });
 
-fs.writeFileSync("./factura-fullmegas.pdf", pdfBufferFullmegas);
+fs.writeFileSync("./factura-alternativa.pdf", pdfBufferAlt);
 
 // Opción 2: Plantilla Moderna / Estándar (con acentos de color personalizados)
 const pdfBufferStandard = await generateRidePdf(invoice, {
@@ -244,9 +253,17 @@ const pdfBufferStandard = await generateRidePdf(invoice, {
   logo: "./mi-logo.png",
 });
 
-// Opción 3: Para devolver directamente en APIs REST / JSON (NestJS / Next.js)
+// Opción 3: Configurar el estilo Alternativo como plantilla por defecto globalmente para todo el proyecto:
+setDefaultRideTemplate("alternative");
+// A partir de aquí, generateRidePdf usará el estilo alternativo por defecto:
+const pdfDefaultAlt = await generateRidePdf(invoice);
+
+// Y para volver a la plantilla standard por defecto de la librería:
+setDefaultRideTemplate("standard");
+
+// Opción 4: Para devolver directamente en APIs REST / JSON (NestJS / Next.js)
 const base64Pdf = await generateRidePdfBase64(invoice, {
-  template: "fullmegas",
+  template: "alternative",
 });
 // { pdf: { base64: base64Pdf, filename: "factura.pdf" } }
 

@@ -145,10 +145,12 @@ export {
   GenerateAccessKey,
 } from "./utils/utils";
 
-// Generación de RIDE en PDF (Formatos Fullmegas y Moderno)
+// Generación de RIDE en PDF (Formatos Estándar y Alternativo)
 export {
   generateRidePdf,
   generateRidePdfBase64,
+  setDefaultRideTemplate,
+  getDefaultRideTemplate,
   RidePdfOptions,
   RidePdfTemplate,
   NormalizedRideData,
@@ -156,6 +158,7 @@ export {
   NormalizedTaxTotal,
   generateBarcodeBuffer,
   normalizeRideData,
+  renderAlternativeTemplate,
   renderFullmegasTemplate,
   renderStandardTemplate,
 } from "./pdf";
