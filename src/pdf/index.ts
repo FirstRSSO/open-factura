@@ -7,6 +7,9 @@ export {
 export {
   RidePdfOptions,
   RidePdfTemplate,
+  RideTemplateLayout,
+  RideFinalBlockColumn,
+  RideFinalBlockReserve,
   NormalizedRideData,
   NormalizedItem,
   NormalizedTaxTotal,
