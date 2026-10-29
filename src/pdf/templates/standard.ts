@@ -1,12 +1,14 @@
 import PDFDocument from "pdfkit";
-import { NormalizedRideData, RidePdfOptions } from "../types";
+import { NormalizedRideData, RidePdfOptions, RideTemplateLayout } from "../types";
 import { generateBarcodeBuffer } from "../barcode";
+import { currentPageIndex } from "../page-index";
+import { requiredFinalBlockHeight } from "../final-block";
 
 export async function renderStandardTemplate(
   doc: PDFKit.PDFDocument,
   data: NormalizedRideData,
   options: RidePdfOptions
-): Promise<void> {
+): Promise<RideTemplateLayout> {
   const margin = 28;
   const pageWidth = doc.page.width;
   const usableWidth = pageWidth - margin * 2;
@@ -139,10 +141,7 @@ export async function renderStandardTemplate(
   // ==========================================
   // 4. TABLA DE ÍTEMS
   // ==========================================
-  const tableHeaderY = currentY;
   const tHeaderH = 22;
-
-  doc.rect(margin, tableHeaderY, usableWidth, tHeaderH).fill(primaryColor);
 
   const colCod = margin + 8;
   const colCant = margin + 80;
@@ -153,15 +152,20 @@ export async function renderStandardTemplate(
 
   const wTotal = usableWidth - (colTotal - margin);
 
-  doc.fillColor("#FFFFFF").font("Helvetica-Bold").fontSize(7.5);
-  doc.text("Código", colCod, tableHeaderY + 7);
-  doc.text("Cant.", colCant, tableHeaderY + 7, { width: 40, align: "center" });
-  doc.text("Descripción", colDesc, tableHeaderY + 7);
-  doc.text("P. Unitario", colUnit, tableHeaderY + 7, { width: 55, align: "right" });
-  doc.text("Descuento", colDescI, tableHeaderY + 7, { width: 50, align: "right" });
-  doc.text("Total", colTotal, tableHeaderY + 7, { width: wTotal - 8, align: "right" });
+  // El encabezado se repite en cada hoja a la que pasa la tabla.
+  const drawTableHeader = (headerY: number): number => {
+    doc.rect(margin, headerY, usableWidth, tHeaderH).fill(primaryColor);
+    doc.fillColor("#FFFFFF").font("Helvetica-Bold").fontSize(7.5);
+    doc.text("Código", colCod, headerY + 7);
+    doc.text("Cant.", colCant, headerY + 7, { width: 40, align: "center" });
+    doc.text("Descripción", colDesc, headerY + 7);
+    doc.text("P. Unitario", colUnit, headerY + 7, { width: 55, align: "right" });
+    doc.text("Descuento", colDescI, headerY + 7, { width: 50, align: "right" });
+    doc.text("Total", colTotal, headerY + 7, { width: wTotal - 8, align: "right" });
+    return headerY + tHeaderH;
+  };
 
-  let rowY = tableHeaderY + tHeaderH;
+  let rowY = drawTableHeader(currentY);
   data.items.forEach((item, idx) => {
     const isEven = idx % 2 === 0;
     const descH = doc.heightOfString(item.description, { width: 210 });
@@ -169,7 +173,7 @@ export async function renderStandardTemplate(
 
     if (rowY + rowH > doc.page.height - 180) {
       doc.addPage();
-      rowY = 30;
+      rowY = drawTableHeader(30);
     }
 
     doc
@@ -195,14 +199,59 @@ export async function renderStandardTemplate(
   // ==========================================
   // 5. SECCIÓN INFERIOR: BARCODE, PAGOS Y TOTALES
   // ==========================================
-  if (currentY > doc.page.height - 190) {
-    doc.addPage();
-    currentY = 30;
-  }
-
   const colWidth = (usableWidth - 14) / 2;
   const leftColX = margin;
   const rightColX = margin + colWidth + 14;
+
+  // Totales en la columna derecha
+  const totalRows: Array<{ label: string; value: string; isBold?: boolean }> = [
+    { label: "Subtotal Sin Impuestos", value: data.totales.subtotalSinImpuestos },
+  ];
+
+  data.totales.impuestos.forEach((tax) => {
+    totalRows.push({
+      label: tax.label || `Subtotal ${tax.tarifa || ""}%`,
+      value: tax.baseImponible,
+    });
+  });
+
+  totalRows.push({ label: "Total Descuento", value: data.totales.totalDescuento });
+
+  data.totales.impuestos.forEach((tax) => {
+    if (Number(tax.valor) > 0) {
+      totalRows.push({
+        label: `IVA ${tax.tarifa || ""}%`,
+        value: tax.valor,
+      });
+    }
+  });
+
+  if (Number(data.totales.propina) > 0) {
+    totalRows.push({ label: "Propina", value: data.totales.propina });
+  }
+
+  totalRows.push({
+    label: "VALOR TOTAL",
+    value: data.totales.importeTotal,
+    isBold: true,
+  });
+
+  // Alto de cada columna: código de barras + información adicional a la
+  // izquierda y filas de totales a la derecha.
+  const barcodeHeight = 44;
+  const additionalHeight =
+    data.infoAdicional.length > 0 ? 22 + data.infoAdicional.length * 12 : 0;
+  const columns = [
+    { x: leftColX, width: colWidth, height: barcodeHeight + additionalHeight },
+    { x: rightColX, width: colWidth, height: totalRows.length * 17 },
+  ];
+
+  const finalBlockNeed = Math.max(190, requiredFinalBlockHeight(columns, options) + 20);
+  if (currentY > doc.page.height - finalBlockNeed) {
+    doc.addPage();
+    currentY = 30;
+  }
+  const finalBlock = { pageIndex: currentPageIndex(doc), top: currentY, columns };
 
   // Código de barras a la izquierda
   let leftY = currentY;
@@ -242,39 +291,6 @@ export async function renderStandardTemplate(
     });
   }
 
-  // Totales en la columna derecha
-  const totalRows: Array<{ label: string; value: string; isBold?: boolean }> = [
-    { label: "Subtotal Sin Impuestos", value: data.totales.subtotalSinImpuestos },
-  ];
-
-  data.totales.impuestos.forEach((tax) => {
-    totalRows.push({
-      label: tax.label || `Subtotal ${tax.tarifa || ""}%`,
-      value: tax.baseImponible,
-    });
-  });
-
-  totalRows.push({ label: "Total Descuento", value: data.totales.totalDescuento });
-
-  data.totales.impuestos.forEach((tax) => {
-    if (Number(tax.valor) > 0) {
-      totalRows.push({
-        label: `IVA ${tax.tarifa || ""}%`,
-        value: tax.valor,
-      });
-    }
-  });
-
-  if (Number(data.totales.propina) > 0) {
-    totalRows.push({ label: "Propina", value: data.totales.propina });
-  }
-
-  totalRows.push({
-    label: "VALOR TOTAL",
-    value: data.totales.importeTotal,
-    isBold: true,
-  });
-
   const rowH = 17;
   let totalsY = currentY;
   totalRows.forEach((r, idx) => {
@@ -298,4 +314,6 @@ export async function renderStandardTemplate(
         align: "right",
       });
   });
+
+  return { finalBlock };
 }
