@@ -13,6 +13,8 @@ export {
   NormalizedRideData,
   NormalizedItem,
   NormalizedTaxTotal,
+  NormalizedModifiedDocument,
+  NormalizedDebitReason,
 } from "./types";
 export { generateBarcodeBuffer } from "./barcode";
 export { normalizeRideData } from "./normalizer";

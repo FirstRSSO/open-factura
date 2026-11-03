@@ -3,6 +3,75 @@ import { NormalizedRideData, RidePdfOptions, RideTemplateLayout } from "../types
 import { generateBarcodeBuffer } from "../barcode";
 import { currentPageIndex } from "../page-index";
 import { requiredFinalBlockHeight } from "../final-block";
+import { modifiedDocumentRows } from "../document-kind";
+
+/** Columna de la tabla de detalle. */
+interface DetailColumn {
+  header: string;
+  x: number;
+  /** Ancho del texto; sin él, la celda es una sola línea desde `x`. */
+  width?: number;
+  align?: "left" | "center" | "right";
+  /** Puede ocupar varias líneas y marca el alto de la fila. */
+  wraps?: boolean;
+  bold?: boolean;
+}
+
+/**
+ * Tabla de detalle según el comprobante: productos en facturas y notas de
+ * crédito; razón y valor de cada motivo en la nota de débito.
+ */
+function buildDetailTable(
+  data: NormalizedRideData,
+  margin: number,
+  usableWidth: number
+): { columns: DetailColumn[]; rows: string[][] } {
+  const colCod = margin + 8;
+
+  if (data.motivos) {
+    const valueWidth = 122;
+    const valueX = margin + usableWidth - 8 - valueWidth;
+    return {
+      columns: [
+        { header: "Razón de la modificación", x: colCod, width: valueX - colCod - 10, wraps: true },
+        {
+          header: "Valor de la modificación",
+          x: valueX,
+          width: valueWidth,
+          align: "right",
+          bold: true,
+        },
+      ],
+      rows: data.motivos.map((reason) => [reason.razon, Number(reason.valor).toFixed(2)]),
+    };
+  }
+
+  const colTotal = margin + 475;
+  return {
+    columns: [
+      { header: "Código", x: colCod },
+      { header: "Cant.", x: margin + 80, width: 40, align: "center" },
+      { header: "Descripción", x: margin + 130, width: 210, wraps: true },
+      { header: "P. Unitario", x: margin + 350, width: 55, align: "right" },
+      { header: "Descuento", x: margin + 415, width: 50, align: "right" },
+      {
+        header: "Total",
+        x: colTotal,
+        width: usableWidth - (colTotal - margin) - 8,
+        align: "right",
+        bold: true,
+      },
+    ],
+    rows: data.items.map((item) => [
+      item.code,
+      String(item.quantity),
+      item.description,
+      Number(item.unitPrice).toFixed(2),
+      Number(item.discount).toFixed(2),
+      Number(item.total).toFixed(2),
+    ]),
+  };
+}
 
 export async function renderStandardTemplate(
   doc: PDFKit.PDFDocument,
@@ -100,7 +169,14 @@ export async function renderStandardTemplate(
   // ==========================================
   // 3. DATOS DEL CLIENTE / RECEPTOR
   // ==========================================
-  const clientBoxH = 46;
+  // En una nota van debajo el comprobante que modifica, su fecha y la razón.
+  const modifiedRows = modifiedDocumentRows(data);
+  const modifiedRowsWidth = usableWidth - 20;
+  doc.font("Helvetica-Bold").fontSize(8);
+  const modifiedRowHeights = modifiedRows.map(
+    ([label, value]) => doc.heightOfString(`${label}: ${value}`, { width: modifiedRowsWidth }) + 4
+  );
+  const clientBoxH = 46 + modifiedRowHeights.reduce((acc, h) => acc + h, 0);
   doc
     .rect(margin, currentY, usableWidth, clientBoxH)
     .fillAndStroke("#FFFFFF", "#E2E8F0");
@@ -136,6 +212,17 @@ export async function renderStandardTemplate(
       .text(` ${data.comprador.direccion}`);
   }
 
+  let modifiedY = currentY + 46;
+  modifiedRows.forEach(([label, value], index) => {
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(8)
+      .text(`${label}:`, margin + 10, modifiedY, { width: modifiedRowsWidth, continued: true })
+      .font("Helvetica")
+      .text(` ${value}`);
+    modifiedY += modifiedRowHeights[index];
+  });
+
   currentY += clientBoxH + 12;
 
   // ==========================================
@@ -143,32 +230,29 @@ export async function renderStandardTemplate(
   // ==========================================
   const tHeaderH = 22;
 
-  const colCod = margin + 8;
-  const colCant = margin + 80;
-  const colDesc = margin + 130;
-  const colUnit = margin + 350;
-  const colDescI = margin + 415;
-  const colTotal = margin + 475;
-
-  const wTotal = usableWidth - (colTotal - margin);
+  const table = buildDetailTable(data, margin, usableWidth);
+  const wrapColumn = table.columns.findIndex((column) => column.wraps);
 
   // El encabezado se repite en cada hoja a la que pasa la tabla.
   const drawTableHeader = (headerY: number): number => {
     doc.rect(margin, headerY, usableWidth, tHeaderH).fill(primaryColor);
     doc.fillColor("#FFFFFF").font("Helvetica-Bold").fontSize(7.5);
-    doc.text("Código", colCod, headerY + 7);
-    doc.text("Cant.", colCant, headerY + 7, { width: 40, align: "center" });
-    doc.text("Descripción", colDesc, headerY + 7);
-    doc.text("P. Unitario", colUnit, headerY + 7, { width: 55, align: "right" });
-    doc.text("Descuento", colDescI, headerY + 7, { width: 50, align: "right" });
-    doc.text("Total", colTotal, headerY + 7, { width: wTotal - 8, align: "right" });
+    table.columns.forEach((column) => {
+      doc.text(
+        column.header,
+        column.x,
+        headerY + 7,
+        column.align ? { width: column.width, align: column.align } : {}
+      );
+    });
     return headerY + tHeaderH;
   };
 
   let rowY = drawTableHeader(currentY);
-  data.items.forEach((item, idx) => {
+  table.rows.forEach((cells, idx) => {
     const isEven = idx % 2 === 0;
-    const descH = doc.heightOfString(item.description, { width: 210 });
+    const wrapWidth = table.columns[wrapColumn]?.width;
+    const descH = wrapColumn >= 0 ? doc.heightOfString(cells[wrapColumn], { width: wrapWidth }) : 0;
     const rowH = Math.max(descH + 8, 18);
 
     if (rowY + rowH > doc.page.height - 180) {
@@ -181,14 +265,14 @@ export async function renderStandardTemplate(
       .fillAndStroke(isEven ? "#F8FAFC" : "#FFFFFF", "#E2E8F0");
 
     doc.fillColor("#0F172A").font("Helvetica").fontSize(7.5);
-    doc.text(item.code, colCod, rowY + 5);
-    doc.text(String(item.quantity), colCant, rowY + 5, { width: 40, align: "center" });
-    doc.text(item.description, colDesc, rowY + 5, { width: 210 });
-    doc.text(Number(item.unitPrice).toFixed(2), colUnit, rowY + 5, { width: 55, align: "right" });
-    doc.text(Number(item.discount).toFixed(2), colDescI, rowY + 5, { width: 50, align: "right" });
-    doc.font("Helvetica-Bold").text(Number(item.total).toFixed(2), colTotal, rowY + 5, {
-      width: wTotal - 8,
-      align: "right",
+    table.columns.forEach((column, index) => {
+      if (column.bold) doc.font("Helvetica-Bold");
+      doc.text(
+        cells[index],
+        column.x,
+        rowY + 5,
+        column.width !== undefined ? { width: column.width, align: column.align ?? "left" } : {}
+      );
     });
 
     rowY += rowH;

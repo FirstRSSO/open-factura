@@ -159,6 +159,8 @@ export {
   NormalizedRideData,
   NormalizedItem,
   NormalizedTaxTotal,
+  NormalizedModifiedDocument,
+  NormalizedDebitReason,
   generateBarcodeBuffer,
   normalizeRideData,
   renderAlternativeTemplate,

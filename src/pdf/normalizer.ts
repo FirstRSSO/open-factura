@@ -1,5 +1,19 @@
 import { parseXml } from "../utils/xml";
-import { NormalizedRideData, NormalizedItem, NormalizedTaxTotal, RidePdfOptions } from "./types";
+import {
+  NormalizedDebitReason,
+  NormalizedModifiedDocument,
+  NormalizedRideData,
+  NormalizedItem,
+  NormalizedTaxTotal,
+  RidePdfOptions,
+} from "./types";
+import { rideDocumentTitle } from "./document-kind";
+
+/** Un nodo repetible del XML llega como objeto si solo hay uno. */
+function asArray(value: any): any[] {
+  if (value === undefined || value === null) return [];
+  return Array.isArray(value) ? value : [value];
+}
 
 const FORMAS_PAGO: Record<string, string> = {
   "01": "SIN UTILIZACIÓN DEL SISTEMA FINANCIERO",
@@ -10,6 +24,23 @@ const FORMAS_PAGO: Record<string, string> = {
   "19": "TARJETA DE CRÉDITO",
   "20": "OTROS CON UTILIZACIÓN DEL SISTEMA FINANCIERO",
   "21": "ENDOSO DE TÍTULOS",
+};
+
+/**
+ * Tarifa de IVA por `codigoPorcentaje`, para los comprobantes que no la
+ * traen en sus totales (la nota de crédito no lleva `tarifa` en
+ * `totalConImpuestos`).
+ */
+const IVA_RATE_BY_CODE: Record<string, string> = {
+  "0": "0",
+  "2": "12",
+  "3": "14",
+  "4": "15",
+  "5": "5",
+  "6": "0",
+  "7": "0",
+  "8": "8",
+  "10": "13",
 };
 
 export function normalizeRideData(
@@ -23,12 +54,17 @@ export function normalizeRideData(
     doc = parseXml(input);
   }
 
-  // Identificar raíz (factura, liquidacionCompra, etc.)
-  const factura = doc?.factura || doc?.liquidacionCompra || doc;
+  // Identificar raíz (factura, liquidacionCompra, notaCredito, notaDebito)
+  const factura =
+    doc?.factura || doc?.liquidacionCompra || doc?.notaCredito || doc?.notaDebito || doc;
   const infoTributaria = factura?.infoTributaria || {};
-  const infoFactura = factura?.infoFactura || factura?.infoLiquidacionCompra || {};
-  const detallesObj = factura?.detalles?.detalle || [];
-  const itemsArray = Array.isArray(detallesObj) ? detallesObj : [detallesObj];
+  const infoFactura =
+    factura?.infoFactura ||
+    factura?.infoLiquidacionCompra ||
+    factura?.infoNotaCredito ||
+    factura?.infoNotaDebito ||
+    {};
+  const itemsArray = asArray(factura?.detalles?.detalle);
 
   const estab = String(infoTributaria.estab || "001").padStart(3, "0");
   const ptoEmi = String(infoTributaria.ptoEmi || "001").padStart(3, "0");
@@ -38,8 +74,7 @@ export function normalizeRideData(
   const claveAcceso = String(infoTributaria.claveAcceso || "");
   const codDoc = String(infoTributaria.codDoc || "01");
 
-  const tipoComprobante =
-    codDoc === "03" ? "LIQUIDACIÓN DE COMPRA" : "FACTURA";
+  const tipoComprobante = rideDocumentTitle(codDoc);
 
   const authOpt = options?.authorization || {};
   const numeroAutorizacion =
@@ -52,12 +87,15 @@ export function normalizeRideData(
   const tipoEmision =
     infoTributaria.tipoEmision === "1" ? "NORMAL" : "INDISPONIBILIDAD DEL SISTEMA";
 
-  // Normalizar Items
+  // Normalizar Items (la nota de crédito usa codigoInterno/codigoAdicional)
   const items: NormalizedItem[] = itemsArray
-    .filter((d: any) => d && (d.descripcion || d.codigoPrincipal))
+    .filter((d: any) => d && (d.descripcion || d.codigoPrincipal || d.codigoInterno))
     .map((d: any, idx: number) => ({
-      code: String(d.codigoPrincipal || d.codigo || idx + 1),
-      auxCode: d.codigoAuxiliar ? String(d.codigoAuxiliar) : undefined,
+      code: String(d.codigoPrincipal || d.codigoInterno || d.codigo || idx + 1),
+      auxCode:
+        d.codigoAuxiliar || d.codigoAdicional
+          ? String(d.codigoAuxiliar || d.codigoAdicional)
+          : undefined,
       description: String(d.descripcion || "-"),
       quantity: d.cantidad || "1",
       unitPrice: d.precioUnitario || "0.00",
@@ -65,12 +103,10 @@ export function normalizeRideData(
       total: d.precioTotalSinImpuesto || "0.00",
     }));
 
-  // Normalizar Impuestos Totales
-  const totalImpuestoRaw =
-    infoFactura?.totalConImpuestos?.totalImpuesto || [];
-  const taxArray = Array.isArray(totalImpuestoRaw)
-    ? totalImpuestoRaw
-    : [totalImpuestoRaw];
+  // Normalizar Impuestos Totales (la nota de débito los lleva en `impuestos`)
+  const taxArray = asArray(
+    infoFactura?.totalConImpuestos?.totalImpuesto ?? infoFactura?.impuestos?.impuesto
+  );
 
   const impuestos: NormalizedTaxTotal[] = taxArray
     .filter((t: any) => t && t.codigo)
@@ -90,21 +126,24 @@ export function normalizeRideData(
       return {
         codigo: String(t.codigo),
         codigoPorcentaje: cp,
-        tarifa: t.tarifa ? String(t.tarifa) : undefined,
+        tarifa: t.tarifa ? String(t.tarifa) : IVA_RATE_BY_CODE[cp],
         baseImponible: String(t.baseImponible || "0.00"),
         valor: String(t.valor || "0.00"),
         label,
       };
     });
 
+  // Valor total: importeTotal (factura), valorModificacion (NC) o valorTotal (ND)
+  const importeTotal = String(
+    infoFactura.importeTotal || infoFactura.valorModificacion || infoFactura.valorTotal || "0.00"
+  );
+
   // Normalizar Pagos
-  const pagosRaw = infoFactura?.pagos?.pago || [];
-  const pagosArray = Array.isArray(pagosRaw) ? pagosRaw : [pagosRaw];
-  const pagos = pagosArray
+  const pagos = asArray(infoFactura?.pagos?.pago)
     .filter((p: any) => p && (p.formaPago || p.total))
     .map((p: any) => ({
       formaPago: FORMAS_PAGO[String(p.formaPago)] || String(p.formaPago || "01"),
-      total: String(p.total || infoFactura.importeTotal || "0.00"),
+      total: String(p.total || importeTotal),
       plazo: p.plazo ? String(p.plazo) : undefined,
       unidadTiempo: p.unidadTiempo ? String(p.unidadTiempo) : undefined,
     }));
@@ -184,14 +223,43 @@ export function normalizeRideData(
 
     totales: {
       subtotalSinImpuestos: String(infoFactura.totalSinImpuestos || "0.00"),
-      totalDescuento: String(infoFactura.totalDescuento || "0.00"),
+      // La NC no trae totalDescuento: es la suma de los descuentos del detalle.
+      totalDescuento: String(infoFactura.totalDescuento || sumDiscounts(items)),
       impuestos,
       propina: String(infoFactura.propina || "0.00"),
-      importeTotal: String(infoFactura.importeTotal || "0.00"),
+      importeTotal,
       moneda: String(infoFactura.moneda || "DOLAR"),
     },
 
     pagos,
     infoAdicional,
+    documentoModificado: normalizeModifiedDocument(infoFactura),
+    motivo: infoFactura.motivo ? String(infoFactura.motivo) : undefined,
+    motivos: normalizeDebitReasons(factura?.motivos?.motivo),
   };
+}
+
+function sumDiscounts(items: NormalizedItem[]): string {
+  return items.reduce((acc, item) => acc + (Number(item.discount) || 0), 0).toFixed(2);
+}
+
+function normalizeModifiedDocument(info: any): NormalizedModifiedDocument | undefined {
+  if (!info?.codDocModificado) return undefined;
+  const codDoc = String(info.codDocModificado);
+  return {
+    codDoc,
+    tipo: rideDocumentTitle(codDoc),
+    numero: String(info.numDocModificado || "-"),
+    fechaEmision: String(info.fechaEmisionDocSustento || "-"),
+  };
+}
+
+function normalizeDebitReasons(raw: any): NormalizedDebitReason[] | undefined {
+  const reasons = asArray(raw)
+    .filter((m: any) => m && (m.razon || m.valor))
+    .map((m: any) => ({
+      razon: String(m.razon || "-"),
+      valor: String(m.valor || "0.00"),
+    }));
+  return reasons.length > 0 ? reasons : undefined;
 }

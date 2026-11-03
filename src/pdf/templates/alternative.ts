@@ -3,6 +3,7 @@ import { NormalizedRideData, RidePdfOptions, RideTemplateLayout } from "../types
 import { generateBarcodeBuffer } from "../barcode";
 import { currentPageIndex } from "../page-index";
 import { requiredFinalBlockHeight } from "../final-block";
+import { isCreditNote, modifiedDocumentRows } from "../document-kind";
 
 function roundedRect(
   doc: PDFKit.PDFDocument,
@@ -268,6 +269,113 @@ function buildTotalsRows(data: NormalizedRideData): Array<{ title: string; val: 
   });
 
   return titlesAndValues;
+}
+
+/** Celda vacía de la caja del comprador (la que completa una fila). */
+const EMPTY_CELL: [string, string] = ["", ""];
+
+/** Columna de la tabla de detalle. */
+interface DetailColumn {
+  header: string;
+  x: number;
+  /** Ancho del texto; sin él, la celda es una sola línea desde `x`. */
+  width?: number;
+  align?: "left" | "right";
+  /** Puede ocupar varias líneas: marca el alto de la fila y se centra por su alto. */
+  wraps?: boolean;
+}
+
+interface DetailTable {
+  columns: DetailColumn[];
+  rows: string[][];
+}
+
+const money = (value: number | string) => `$${Number(value || 0).toFixed(2)}`;
+
+/**
+ * Tabla de detalle según el comprobante: productos en facturas y notas de
+ * crédito; razón y valor de cada motivo en la nota de débito.
+ */
+function buildDetailTable(
+  data: NormalizedRideData,
+  margin: number,
+  usableWidth: number
+): DetailTable {
+  const colFirst = margin + 10;
+
+  if (data.motivos) {
+    const valueWidth = 130;
+    const valueX = margin + usableWidth - 10 - valueWidth;
+    return {
+      columns: [
+        {
+          header: "Razón de la modificación",
+          x: colFirst,
+          width: valueX - colFirst - 10,
+          wraps: true,
+        },
+        { header: "Valor de la modificación", x: valueX, width: valueWidth, align: "right" },
+      ],
+      rows: data.motivos.map((reason) => [reason.razon, money(reason.valor)]),
+    };
+  }
+
+  const colCant = margin + 90;
+  const colNombre = margin + 140;
+  const colPrecioUnit = margin + 300;
+  return {
+    columns: [
+      { header: "Cod. Principal", x: colFirst, width: colCant - colFirst - 5, wraps: true },
+      { header: "Cant", x: colCant },
+      { header: "Nombre", x: colNombre, width: colPrecioUnit - colNombre - 5, wraps: true },
+      { header: "Precio Unitario", x: colPrecioUnit, width: 70, align: "right" },
+      { header: "Descuento", x: margin + 390, width: 70, align: "right" },
+      { header: "Precio Total", x: margin + 480, width: 70, align: "right" },
+    ],
+    rows: data.items.map((item, i) => [
+      item.code || `${i + 1}`,
+      String(item.quantity || 0),
+      item.description || "-",
+      money(item.unitPrice),
+      money(item.discount),
+      money(item.total),
+    ]),
+  };
+}
+
+/** Alto de la celda más alta de las que pueden ocupar varias líneas. */
+function measureRowHeight(
+  doc: PDFKit.PDFDocument,
+  columns: DetailColumn[],
+  cells: string[]
+): number {
+  return Math.max(
+    0,
+    ...columns.map((column, index) =>
+      column.wraps ? doc.heightOfString(cells[index], { width: column.width }) : 0
+    )
+  );
+}
+
+function drawRow(
+  doc: PDFKit.PDFDocument,
+  columns: DetailColumn[],
+  cells: string[],
+  rowY: number,
+  rowHeight: number
+): void {
+  const centerY = rowY + (rowHeight - 8) / 2;
+  columns.forEach((column, index) => {
+    const text = cells[index];
+    if (column.wraps) {
+      const height = doc.heightOfString(text, { width: column.width });
+      doc.text(text, column.x, rowY + (rowHeight - height) / 2, { width: column.width });
+    } else if (column.width !== undefined) {
+      doc.text(text, column.x, centerY, { width: column.width, align: column.align ?? "left" });
+    } else {
+      doc.text(text, column.x, centerY);
+    }
+  });
 }
 
 /**
@@ -559,6 +667,14 @@ export async function renderAlternativeTemplate(
     customerBoxLines.push(["DIRECCION", data.comprador.direccion]);
   }
 
+  // Las filas de la nota arrancan en fila nueva para que el comprobante que
+  // modifica y su fecha queden juntos.
+  const modifiedRows = modifiedDocumentRows(data);
+  if (modifiedRows.length > 0 && customerBoxLines.length % 2 === 1) {
+    customerBoxLines.push(EMPTY_CELL);
+  }
+  customerBoxLines.push(...modifiedRows);
+
   const customerFontSize = 7.2;
   const customerLineHeight = 13;
   const customerRowGap = 3;
@@ -596,6 +712,7 @@ export async function renderAlternativeTemplate(
     const row = Math.floor(index / 2);
     const x = margin + 10 + column * (customerColumnWidth + customerColumnGap);
     const y = secondBoxY + 8 + customerRowOffsets[row];
+    if (label === EMPTY_CELL[0]) return;
     drawLabelValue(doc, label, value, x, y, {
       width: customerColumnWidth,
       fontSize: customerFontSize,
@@ -623,27 +740,12 @@ export async function renderAlternativeTemplate(
   const paddingTop = 10;
   const paddingBottom = 5;
 
-  const colCod = margin + 10;
-  const colCant = margin + 90;
-  const colNombre = margin + 140;
-  const colPrecioUnit = margin + 300;
-  const colDesc = margin + 390;
-  const colTotal = margin + 480;
-
-  const widthCod = colCant - colCod - 5;
-  const widthNombre = colPrecioUnit - colNombre - 5;
+  const table = buildDetailTable(data, margin, usableWidth);
 
   doc.font("Helvetica").fontSize(8);
-  const rowHeights: number[] = [];
-
-  data.items.forEach((item, i) => {
-    const code = item.code || `${i + 1}`;
-    const name = item.description || "-";
-
-    const codeHeight = doc.heightOfString(code, { width: widthCod });
-    const nameHeight = doc.heightOfString(name, { width: widthNombre });
-    rowHeights.push(Math.max(codeHeight, nameHeight) + rowPadding);
-  });
+  const rowHeights = table.rows.map(
+    (cells) => measureRowHeight(doc, table.columns, cells) + rowPadding
+  );
 
   // La tabla se reparte en tramos que caben en cada hoja: cada tramo es una
   // caja con su encabezado repetido. Dibujarla de un tirón dejaba que pdfkit
@@ -657,17 +759,13 @@ export async function renderAlternativeTemplate(
   const drawTableHeader = (boxTop: number): number => {
     const headerY = boxTop + 10;
     doc.fontSize(9).font("Helvetica-Bold").fillColor("#000000");
-    doc.text("Cod. Principal", colCod, headerY);
-    doc.text("Cant", colCant, headerY);
-    doc.text("Nombre", colNombre, headerY);
-    doc.text("Precio Unitario", colPrecioUnit, headerY, {
-      width: 70,
-      align: "right",
-    });
-    doc.text("Descuento", colDesc, headerY, { width: 70, align: "right" });
-    doc.text("Precio Total", colTotal, headerY, {
-      width: 70,
-      align: "right",
+    table.columns.forEach((column) => {
+      doc.text(
+        column.header,
+        column.x,
+        headerY,
+        column.align === "right" ? { width: column.width, align: "right" } : {}
+      );
     });
 
     // Línea separadora bajo encabezados
@@ -687,39 +785,8 @@ export async function renderAlternativeTemplate(
     doc.font("Helvetica").fontSize(8).fillColor("#000000");
 
     for (let i = segment.start; i < segment.end; i++) {
-      const item = data.items[i];
-      const code = item.code || `${i + 1}`;
-      const name = item.description || "-";
-      const unitPrice = Number(item.unitPrice || 0).toFixed(2);
-      const total = Number(item.total || 0).toFixed(2);
-      const qty = String(item.quantity || 0);
-      const discount = Number(item.discount || 0).toFixed(2);
-
-      const rowH = rowHeights[i];
-      const codeHeight = doc.heightOfString(code, { width: widthCod });
-      const nameHeight = doc.heightOfString(name, { width: widthNombre });
-
-      const offsetCodeY = rowY + (rowH - codeHeight) / 2;
-      const offsetNameY = rowY + (rowH - nameHeight) / 2;
-      const centerY = rowY + (rowH - 8) / 2;
-
-      doc.text(code, colCod, offsetCodeY, { width: widthCod });
-      doc.text(qty, colCant, centerY);
-      doc.text(name, colNombre, offsetNameY, { width: widthNombre });
-      doc.text(`$${unitPrice}`, colPrecioUnit, centerY, {
-        width: 70,
-        align: "right",
-      });
-      doc.text(`$${discount}`, colDesc, centerY, {
-        width: 70,
-        align: "right",
-      });
-      doc.text(`$${total}`, colTotal, centerY, {
-        width: 70,
-        align: "right",
-      });
-
-      rowY += rowH;
+      drawRow(doc, table.columns, table.rows[i], rowY, rowHeights[i]);
+      rowY += rowHeights[i];
     }
   });
   const tableBottom = rowY + paddingBottom;
@@ -756,7 +823,9 @@ export async function renderAlternativeTemplate(
   }, 0);
   const finalInfoBoxHeight = Math.max(infoBoxHeight + 30, 45);
 
-  // --- Medidas: Forma de Pago (cada fila crece con su texto)
+  // --- Medidas: Forma de Pago (cada fila crece con su texto). La nota de
+  // crédito no lleva pagos en el XSD, así que su RIDE tampoco los muestra.
+  const showPayments = !isCreditNote(data);
   const colMethodOffset = 10;
   const colPlazoOffset = 10 + leftBoxWidth * 0.6;
   const colValorOffset = 10 + leftBoxWidth * 0.8;
@@ -783,8 +852,9 @@ export async function renderAlternativeTemplate(
         doc.heightOfString(item.formaPago, { width: methodWidth }) + 4
       )
   );
-  const table2Height =
-    paymentRowMinHeight + paymentRowHeights.reduce((acc, h) => acc + h, 0) + 10;
+  const table2Height = showPayments
+    ? paymentRowMinHeight + paymentRowHeights.reduce((acc, h) => acc + h, 0) + 10
+    : 0;
 
   const termsHeight = measureCustomTextBox(doc, leftBoxWidth, "Términos y condiciones", options.companyData?.termsText);
   const footerHeight = measureCustomTextBox(doc, leftBoxWidth, "Pie de factura", options.companyData?.footerText);
@@ -797,9 +867,7 @@ export async function renderAlternativeTemplate(
 
   const leftBlockHeight =
     finalInfoBoxHeight +
-    14 -
-    5 +
-    table2Height +
+    (showPayments ? 14 - 5 + table2Height : 0) +
     (termsHeight ? 15 + termsHeight : 0) +
     (footerHeight ? 15 + footerHeight : 0);
   const columns = [
@@ -845,38 +913,41 @@ export async function renderAlternativeTemplate(
     lineY += doc.heightOfString(text, { width: infoTextWidth, lineGap: 2 }) + 5;
   });
 
-  // --- Caja Izquierda 2: Forma de Pago (Tabla)
-  const table2Top = finalTop + finalInfoBoxHeight + 14;
-  const colMethod = leftX + colMethodOffset;
-  const colPlazo = leftX + colPlazoOffset;
-  const colValor = leftX + colValorOffset;
+  let leftContentBottom = finalTop + finalInfoBoxHeight;
+  if (showPayments) {
+    // --- Caja Izquierda 2: Forma de Pago (Tabla)
+    const table2Top = finalTop + finalInfoBoxHeight + 14;
+    const colMethod = leftX + colMethodOffset;
+    const colPlazo = leftX + colPlazoOffset;
+    const colValor = leftX + colValorOffset;
 
-  doc.font("Helvetica-Bold").fontSize(8).fillColor("#000000");
-  doc.text("Forma de pago", colMethod, table2Top, { width: methodWidth });
-  doc.text("Plazo", colPlazo, table2Top, { width: plazoWidth, align: "right" });
-  doc.text("Valor", colValor, table2Top, { width: valorWidth, align: "right" });
+    doc.font("Helvetica-Bold").fontSize(8).fillColor("#000000");
+    doc.text("Forma de pago", colMethod, table2Top, { width: methodWidth });
+    doc.text("Plazo", colPlazo, table2Top, { width: plazoWidth, align: "right" });
+    doc.text("Valor", colValor, table2Top, { width: valorWidth, align: "right" });
 
-  doc
-    .moveTo(leftX + 5, table2Top + 12)
-    .lineTo(leftX + leftBoxWidth - 5, table2Top + 12)
-    .stroke();
+    doc
+      .moveTo(leftX + 5, table2Top + 12)
+      .lineTo(leftX + leftBoxWidth - 5, table2Top + 12)
+      .stroke();
 
-  let row2Y = table2Top + 18;
-  doc.font("Helvetica").fontSize(8).fillColor("#000000");
+    let row2Y = table2Top + 18;
+    doc.font("Helvetica").fontSize(8).fillColor("#000000");
 
-  pagosList.forEach((item, index) => {
-    doc.text(item.formaPago, colMethod, row2Y, { width: methodWidth });
-    doc.text(item.plazo || "0", colPlazo, row2Y, { width: plazoWidth, align: "right" });
-    doc.text(`$${Number(item.total).toFixed(2)}`, colValor, row2Y, {
-      width: valorWidth,
-      align: "right",
+    pagosList.forEach((item, index) => {
+      doc.text(item.formaPago, colMethod, row2Y, { width: methodWidth });
+      doc.text(item.plazo || "0", colPlazo, row2Y, { width: plazoWidth, align: "right" });
+      doc.text(`$${Number(item.total).toFixed(2)}`, colValor, row2Y, {
+        width: valorWidth,
+        align: "right",
+      });
+      row2Y += paymentRowHeights[index];
     });
-    row2Y += paymentRowHeights[index];
-  });
 
-  roundedRect(doc, leftX, table2Top - 5, leftBoxWidth, table2Height, 6);
+    roundedRect(doc, leftX, table2Top - 5, leftBoxWidth, table2Height, 6);
 
-  let leftContentBottom = table2Top - 5 + table2Height;
+    leftContentBottom = table2Top - 5 + table2Height;
+  }
   if (termsHeight) {
     leftContentBottom += 15;
     drawCustomTextBox(doc, {

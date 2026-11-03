@@ -184,4 +184,31 @@ export interface NormalizedRideData {
     nombre: string;
     valor: string;
   }>;
+
+  /** Comprobante que modifica una nota de crédito o de débito. */
+  documentoModificado?: NormalizedModifiedDocument;
+
+  /** Razón de la nota de crédito (`infoNotaCredito.motivo`). */
+  motivo?: string;
+
+  /**
+   * Motivos de la nota de débito: ocupan el lugar de `items`, que en una
+   * nota de débito llega vacío.
+   */
+  motivos?: NormalizedDebitReason[];
+}
+
+export interface NormalizedModifiedDocument {
+  codDoc: string;
+  /** Nombre del tipo (p. ej. «FACTURA»). */
+  tipo: string;
+  /** `estab-ptoEmi-secuencial`. */
+  numero: string;
+  /** `dd/mm/aaaa`. */
+  fechaEmision: string;
+}
+
+export interface NormalizedDebitReason {
+  razon: string;
+  valor: string;
 }
