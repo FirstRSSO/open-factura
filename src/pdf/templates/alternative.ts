@@ -1,6 +1,9 @@
 import PDFDocument from "pdfkit";
-import { NormalizedRideData, RidePdfOptions } from "../types";
+import { NormalizedRideData, RidePdfOptions, RideTemplateLayout } from "../types";
 import { generateBarcodeBuffer } from "../barcode";
+import { currentPageIndex } from "../page-index";
+import { requiredFinalBlockHeight } from "../final-block";
+import { isCreditNote, modifiedDocumentRows } from "../document-kind";
 
 function roundedRect(
   doc: PDFKit.PDFDocument,
@@ -127,6 +130,254 @@ function drawCustomTextBox(
   return height;
 }
 
+/** Alto donde empieza el contenido en las hojas de continuación. */
+const CONTINUATION_TOP = 25;
+
+/**
+ * Último punto dibujable de la hoja. Se deja aire sobre el margen inferior:
+ * un texto que lo cruza hace que pdfkit abra una hoja nueva por su cuenta.
+ */
+function pageBottomOf(doc: PDFKit.PDFDocument): number {
+  return doc.page.height - doc.page.margins.bottom - 10;
+}
+
+export interface TableSegment {
+  /** Abre una hoja nueva antes de dibujar el tramo. */
+  newPage: boolean;
+  top: number;
+  height: number;
+  /** Primera fila del tramo (incluida). */
+  start: number;
+  /** Fila donde termina el tramo (excluida). */
+  end: number;
+}
+
+/**
+ * Reparte las filas de la tabla en tramos que caben en cada hoja. Cada tramo
+ * lleva al menos una fila y su propio encabezado (`chromeHeight`).
+ */
+export function splitTableIntoPages(
+  rowHeights: number[],
+  layout: { firstTop: number; pageBottom: number; chromeHeight: number }
+): TableSegment[] {
+  const { firstTop, pageBottom, chromeHeight } = layout;
+  const segments: TableSegment[] = [];
+  const firstFits = firstTop + chromeHeight + (rowHeights[0] ?? 0) <= pageBottom;
+  let current: TableSegment = {
+    newPage: !firstFits,
+    top: firstFits ? firstTop : CONTINUATION_TOP,
+    height: chromeHeight,
+    start: 0,
+    end: 0,
+  };
+
+  rowHeights.forEach((rowHeight, index) => {
+    const hasRows = index > current.start;
+    if (hasRows && current.top + current.height + rowHeight > pageBottom) {
+      segments.push({ ...current, end: index });
+      current = {
+        newPage: true,
+        top: CONTINUATION_TOP,
+        height: chromeHeight,
+        start: index,
+        end: index,
+      };
+    }
+    current.height += rowHeight;
+  });
+  segments.push({ ...current, end: rowHeights.length });
+  return segments;
+}
+
+function measureCustomTextBox(
+  doc: PDFKit.PDFDocument,
+  width: number,
+  title: string | undefined,
+  text: string | undefined
+): number {
+  const normalizedText = String(text || "").replace(/\r\n/g, "\n").trim();
+  if (!normalizedText) return 0;
+  const padding = 10;
+  const titleHeight = title ? 14 : 0;
+  doc.font("Helvetica").fontSize(8);
+  const textHeight = doc.heightOfString(normalizedText, {
+    width: width - padding * 2,
+    lineGap: 2,
+  });
+  return padding * 2 + titleHeight + textHeight;
+}
+/** Filas del cuadro de totales en el orden del RIDE oficial. */
+function buildTotalsRows(data: NormalizedRideData): Array<{ title: string; val: number }> {
+  const subtotalsMap: Record<string, { label: string; base: number; iva: number }> = {};
+  data.totales.impuestos.forEach((tax) => {
+    const cp = tax.codigoPorcentaje;
+    const base = Number(tax.baseImponible) || 0;
+    const iva = Number(tax.valor) || 0;
+    if (!subtotalsMap[cp]) {
+      subtotalsMap[cp] = { label: tax.label || `Subtotal ${tax.tarifa || ""}%:`, base, iva };
+    } else {
+      subtotalsMap[cp].base += base;
+      subtotalsMap[cp].iva += iva;
+    }
+  });
+
+  const titlesAndValues: Array<{ title: string; val: number }> = [
+    { title: "Subtotal sin impuesto:", val: Number(data.totales.subtotalSinImpuestos) },
+  ];
+
+  if (subtotalsMap["4"]) {
+    titlesAndValues.push({ title: "Subtotal 15%:", val: subtotalsMap["4"].base });
+  } else if (subtotalsMap["2"]) {
+    titlesAndValues.push({ title: "Subtotal 12%:", val: subtotalsMap["2"].base });
+  } else {
+    titlesAndValues.push({ title: "Subtotal 15%:", val: 0 });
+  }
+
+  titlesAndValues.push({
+    title: "Subtotal no objeto de IVA:",
+    val: subtotalsMap["6"] ? subtotalsMap["6"].base : 0,
+  });
+
+  titlesAndValues.push({
+    title: "Subtotal Exento IVA:",
+    val: subtotalsMap["7"] ? subtotalsMap["7"].base : 0,
+  });
+
+  titlesAndValues.push({
+    title: "Descuento:",
+    val: Number(data.totales.totalDescuento),
+  });
+
+  titlesAndValues.push({ title: "ICE:", val: 0 });
+  titlesAndValues.push({ title: "IRBPNR:", val: 0 });
+
+  if (subtotalsMap["4"] && subtotalsMap["4"].iva > 0) {
+    titlesAndValues.push({ title: "IVA 15%:", val: subtotalsMap["4"].iva });
+  } else if (subtotalsMap["2"] && subtotalsMap["2"].iva > 0) {
+    titlesAndValues.push({ title: "IVA 12%:", val: subtotalsMap["2"].iva });
+  } else {
+    titlesAndValues.push({ title: "IVA 15%:", val: 0 });
+  }
+
+  if (Number(data.totales.propina) > 0) {
+    titlesAndValues.push({ title: "Propina:", val: Number(data.totales.propina) });
+  }
+
+  titlesAndValues.push({
+    title: "Valor total:",
+    val: Number(data.totales.importeTotal),
+  });
+
+  return titlesAndValues;
+}
+
+/** Celda vacía de la caja del comprador (la que completa una fila). */
+const EMPTY_CELL: [string, string] = ["", ""];
+
+/** Columna de la tabla de detalle. */
+interface DetailColumn {
+  header: string;
+  x: number;
+  /** Ancho del texto; sin él, la celda es una sola línea desde `x`. */
+  width?: number;
+  align?: "left" | "right";
+  /** Puede ocupar varias líneas: marca el alto de la fila y se centra por su alto. */
+  wraps?: boolean;
+}
+
+interface DetailTable {
+  columns: DetailColumn[];
+  rows: string[][];
+}
+
+const money = (value: number | string) => `$${Number(value || 0).toFixed(2)}`;
+
+/**
+ * Tabla de detalle según el comprobante: productos en facturas y notas de
+ * crédito; razón y valor de cada motivo en la nota de débito.
+ */
+function buildDetailTable(
+  data: NormalizedRideData,
+  margin: number,
+  usableWidth: number
+): DetailTable {
+  const colFirst = margin + 10;
+
+  if (data.motivos) {
+    const valueWidth = 130;
+    const valueX = margin + usableWidth - 10 - valueWidth;
+    return {
+      columns: [
+        {
+          header: "Razón de la modificación",
+          x: colFirst,
+          width: valueX - colFirst - 10,
+          wraps: true,
+        },
+        { header: "Valor de la modificación", x: valueX, width: valueWidth, align: "right" },
+      ],
+      rows: data.motivos.map((reason) => [reason.razon, money(reason.valor)]),
+    };
+  }
+
+  const colCant = margin + 90;
+  const colNombre = margin + 140;
+  const colPrecioUnit = margin + 300;
+  return {
+    columns: [
+      { header: "Cod. Principal", x: colFirst, width: colCant - colFirst - 5, wraps: true },
+      { header: "Cant", x: colCant },
+      { header: "Nombre", x: colNombre, width: colPrecioUnit - colNombre - 5, wraps: true },
+      { header: "Precio Unitario", x: colPrecioUnit, width: 70, align: "right" },
+      { header: "Descuento", x: margin + 390, width: 70, align: "right" },
+      { header: "Precio Total", x: margin + 480, width: 70, align: "right" },
+    ],
+    rows: data.items.map((item, i) => [
+      item.code || `${i + 1}`,
+      String(item.quantity || 0),
+      item.description || "-",
+      money(item.unitPrice),
+      money(item.discount),
+      money(item.total),
+    ]),
+  };
+}
+
+/** Alto de la celda más alta de las que pueden ocupar varias líneas. */
+function measureRowHeight(
+  doc: PDFKit.PDFDocument,
+  columns: DetailColumn[],
+  cells: string[]
+): number {
+  return Math.max(
+    0,
+    ...columns.map((column, index) =>
+      column.wraps ? doc.heightOfString(cells[index], { width: column.width }) : 0
+    )
+  );
+}
+
+function drawRow(
+  doc: PDFKit.PDFDocument,
+  columns: DetailColumn[],
+  cells: string[],
+  rowY: number,
+  rowHeight: number
+): void {
+  const centerY = rowY + (rowHeight - 8) / 2;
+  columns.forEach((column, index) => {
+    const text = cells[index];
+    if (column.wraps) {
+      const height = doc.heightOfString(text, { width: column.width });
+      doc.text(text, column.x, rowY + (rowHeight - height) / 2, { width: column.width });
+    } else if (column.width !== undefined) {
+      doc.text(text, column.x, centerY, { width: column.width, align: column.align ?? "left" });
+    } else {
+      doc.text(text, column.x, centerY);
+    }
+  });
+}
+
 /**
  * Renderiza la plantilla de comprobante en estilo Alternativo
  * (cajas redondeadas con radio 10, banner superior de acento, alturas sincronizadas,
@@ -136,7 +387,7 @@ export async function renderAlternativeTemplate(
   doc: PDFKit.PDFDocument,
   data: NormalizedRideData,
   options: RidePdfOptions
-): Promise<void> {
+): Promise<RideTemplateLayout> {
   const pageWidth = doc.page.width;
   const margin = 20;
   const usableWidth = pageWidth - margin * 2;
@@ -416,23 +667,55 @@ export async function renderAlternativeTemplate(
     customerBoxLines.push(["DIRECCION", data.comprador.direccion]);
   }
 
+  // Las filas de la nota arrancan en fila nueva para que el comprobante que
+  // modifica y su fecha queden juntos.
+  const modifiedRows = modifiedDocumentRows(data);
+  if (modifiedRows.length > 0 && customerBoxLines.length % 2 === 1) {
+    customerBoxLines.push(EMPTY_CELL);
+  }
+  customerBoxLines.push(...modifiedRows);
+
+  const customerFontSize = 7.2;
   const customerLineHeight = 13;
+  const customerRowGap = 3;
   const customerColumnGap = 18;
   const customerColumnWidth = (usableWidth - 20 - customerColumnGap) / 2;
-  const customerRows = Math.ceil(customerBoxLines.length / 2);
-  const secondBoxHeight = Math.max(42, customerRows * customerLineHeight + 16);
+
+  // Cada fila crece con su celda más alta: un nombre o dirección largos
+  // ocupan varias líneas y, con un alto fijo, pisaban la fila de abajo.
+  // Se mide en negrita (más ancha que la regular) para no quedarse corto.
+  doc.font("Helvetica-Bold").fontSize(customerFontSize);
+  const customerRowHeights: number[] = [];
+  customerBoxLines.forEach(([label, value], index) => {
+    const row = Math.floor(index / 2);
+    const cellHeight = doc.heightOfString(`${label}: ${value || "-"}`, {
+      width: customerColumnWidth,
+    });
+    customerRowHeights[row] = Math.max(
+      customerRowHeights[row] ?? customerLineHeight - customerRowGap,
+      cellHeight
+    );
+  });
+  const customerRowOffsets: number[] = [];
+  let customerContentHeight = 0;
+  customerRowHeights.forEach((rowHeight, row) => {
+    customerRowOffsets[row] = customerContentHeight;
+    customerContentHeight += rowHeight + customerRowGap;
+  });
+  const secondBoxHeight = Math.max(42, customerContentHeight + 16);
 
   roundedRect(doc, margin, secondBoxY, usableWidth, secondBoxHeight, 10);
-  doc.fontSize(7.2).font("Helvetica").fillColor("#000000");
+  doc.fontSize(customerFontSize).font("Helvetica").fillColor("#000000");
 
   customerBoxLines.forEach(([label, value], index) => {
     const column = index % 2;
     const row = Math.floor(index / 2);
     const x = margin + 10 + column * (customerColumnWidth + customerColumnGap);
-    const y = secondBoxY + 8 + row * customerLineHeight;
+    const y = secondBoxY + 8 + customerRowOffsets[row];
+    if (label === EMPTY_CELL[0]) return;
     drawLabelValue(doc, label, value, x, y, {
       width: customerColumnWidth,
-      fontSize: 7.2,
+      fontSize: customerFontSize,
     });
   });
 
@@ -457,105 +740,62 @@ export async function renderAlternativeTemplate(
   const paddingTop = 10;
   const paddingBottom = 5;
 
-  const colCod = margin + 10;
-  const colCant = margin + 90;
-  const colNombre = margin + 140;
-  const colPrecioUnit = margin + 300;
-  const colDesc = margin + 390;
-  const colTotal = margin + 480;
-
-  const widthCod = colCant - colCod - 5;
-  const widthNombre = colPrecioUnit - colNombre - 5;
+  const table = buildDetailTable(data, margin, usableWidth);
 
   doc.font("Helvetica").fontSize(8);
-  let dynamicTableHeight = headerHeight + paddingTop + paddingBottom;
-  const rowHeights: number[] = [];
+  const rowHeights = table.rows.map(
+    (cells) => measureRowHeight(doc, table.columns, cells) + rowPadding
+  );
 
-  data.items.forEach((item, i) => {
-    const code = item.code || `${i + 1}`;
-    const name = item.description || "-";
-
-    const codeHeight = doc.heightOfString(code, { width: widthCod });
-    const nameHeight = doc.heightOfString(name, { width: widthNombre });
-    const rowHeight = Math.max(codeHeight, nameHeight) + rowPadding;
-
-    rowHeights.push(rowHeight);
-    dynamicTableHeight += rowHeight;
+  // La tabla se reparte en tramos que caben en cada hoja: cada tramo es una
+  // caja con su encabezado repetido. Dibujarla de un tirón dejaba que pdfkit
+  // saltara de hoja por su cuenta en cada texto y lo de abajo se montaba.
+  const tableSegments = splitTableIntoPages(rowHeights, {
+    firstTop: tableTop,
+    pageBottom: pageBottomOf(doc),
+    chromeHeight: headerHeight + paddingTop + paddingBottom,
   });
 
-  // Dibujar caja contenedora de la tabla con radio 10
-  roundedRect(doc, margin, tableTop, usableWidth, dynamicTableHeight, 10);
-
-  // Encabezados
-  const headerY = tableTop + 10;
-  doc.fontSize(9).font("Helvetica-Bold").fillColor("#000000");
-  doc.text("Cod. Principal", colCod, headerY);
-  doc.text("Cant", colCant, headerY);
-  doc.text("Nombre", colNombre, headerY);
-  doc.text("Precio Unitario", colPrecioUnit, headerY, {
-    width: 70,
-    align: "right",
-  });
-  doc.text("Descuento", colDesc, headerY, { width: 70, align: "right" });
-  doc.text("Precio Total", colTotal, headerY, {
-    width: 70,
-    align: "right",
-  });
-
-  // Línea separadora bajo encabezados
-  doc
-    .moveTo(margin + 5, headerY + 15)
-    .lineTo(margin + usableWidth - 5, headerY + 15)
-    .stroke();
-
-  // Filas de productos
-  let rowY = headerY + 25;
-  doc.font("Helvetica").fontSize(8).fillColor("#000000");
-
-  data.items.forEach((item, i) => {
-    const code = item.code || `${i + 1}`;
-    const name = item.description || "-";
-    const unitPrice = Number(item.unitPrice || 0).toFixed(2);
-    const total = Number(item.total || 0).toFixed(2);
-    const qty = String(item.quantity || 0);
-    const discount = Number(item.discount || 0).toFixed(2);
-
-    const rowH = rowHeights[i];
-    const codeHeight = doc.heightOfString(code, { width: widthCod });
-    const nameHeight = doc.heightOfString(name, { width: widthNombre });
-
-    const offsetCodeY = rowY + (rowH - codeHeight) / 2;
-    const offsetNameY = rowY + (rowH - nameHeight) / 2;
-    const centerY = rowY + (rowH - 8) / 2;
-
-    doc.text(code, colCod, offsetCodeY, { width: widthCod });
-    doc.text(qty, colCant, centerY);
-    doc.text(name, colNombre, offsetNameY, { width: widthNombre });
-    doc.text(`$${unitPrice}`, colPrecioUnit, centerY, {
-      width: 70,
-      align: "right",
-    });
-    doc.text(`$${discount}`, colDesc, centerY, {
-      width: 70,
-      align: "right",
-    });
-    doc.text(`$${total}`, colTotal, centerY, {
-      width: 70,
-      align: "right",
+  const drawTableHeader = (boxTop: number): number => {
+    const headerY = boxTop + 10;
+    doc.fontSize(9).font("Helvetica-Bold").fillColor("#000000");
+    table.columns.forEach((column) => {
+      doc.text(
+        column.header,
+        column.x,
+        headerY,
+        column.align === "right" ? { width: column.width, align: "right" } : {}
+      );
     });
 
-    rowY += rowH;
+    // Línea separadora bajo encabezados
+    doc
+      .moveTo(margin + 5, headerY + 15)
+      .lineTo(margin + usableWidth - 5, headerY + 15)
+      .stroke();
+
+    return headerY + 25;
+  };
+
+  let rowY = tableTop;
+  tableSegments.forEach((segment) => {
+    if (segment.newPage) doc.addPage();
+    roundedRect(doc, margin, segment.top, usableWidth, segment.height, 10);
+    rowY = drawTableHeader(segment.top);
+    doc.font("Helvetica").fontSize(8).fillColor("#000000");
+
+    for (let i = segment.start; i < segment.end; i++) {
+      drawRow(doc, table.columns, table.rows[i], rowY, rowHeights[i]);
+      rowY += rowHeights[i];
+    }
   });
+  const tableBottom = rowY + paddingBottom;
 
   // ==========================================
   // 4. SECCIÓN FINAL: INFORMACIÓN ADICIONAL, PAGOS Y TOTALES
   // ==========================================
-  let finalTop = rowY + 16;
-  if (finalTop + 200 > doc.page.height - 20) {
-    doc.addPage();
-    finalTop = 25;
-  }
-
+  // Primero se mide el bloque entero y, si no cabe debajo de la tabla, pasa
+  // completo a una hoja nueva: así nunca se monta sobre los productos.
   const leftBoxWidth = usableWidth * 0.6 + 20;
   const rightBoxWidthT = usableWidth * 0.3 + 20;
   const gapFinal = usableWidth - leftBoxWidth - rightBoxWidthT;
@@ -563,10 +803,8 @@ export async function renderAlternativeTemplate(
   const leftX = margin;
   const rightX = leftX + leftBoxWidth + gapFinal;
 
-  // --- Caja Izquierda 1: Información Adicional
+  // --- Medidas: Información Adicional
   const titleText = "Información adicional";
-  const titleW = doc.widthOfString(titleText);
-  const titleX = leftX + (leftBoxWidth - titleW) / 2;
 
   const additionalLines: Array<{ label?: string; value?: string; text?: string }> = [];
   data.infoAdicional.forEach((info) => {
@@ -578,19 +816,80 @@ export async function renderAlternativeTemplate(
   }
 
   const infoTextWidth = leftBoxWidth - 20;
+  doc.font("Helvetica").fontSize(8);
   const infoBoxHeight = additionalLines.reduce((acc, line) => {
     const txt = line.label ? `${line.label}: ${line.value || "-"}` : line.text || "-";
     return acc + doc.heightOfString(txt, { width: infoTextWidth, lineGap: 2 }) + 5;
   }, 0);
-
   const finalInfoBoxHeight = Math.max(infoBoxHeight + 30, 45);
+
+  // --- Medidas: Forma de Pago (cada fila crece con su texto). La nota de
+  // crédito no lleva pagos en el XSD, así que su RIDE tampoco los muestra.
+  const showPayments = !isCreditNote(data);
+  const colMethodOffset = 10;
+  const colPlazoOffset = 10 + leftBoxWidth * 0.6;
+  const colValorOffset = 10 + leftBoxWidth * 0.8;
+  const methodWidth = leftBoxWidth * 0.6 - 10;
+  const plazoWidth = leftBoxWidth * 0.2 - 15;
+  const valorWidth = leftBoxWidth * 0.2 - 15;
+  const paymentRowMinHeight = 15;
+
+  const pagosList =
+    data.pagos.length > 0
+      ? data.pagos
+      : [
+          {
+            formaPago: "SIN UTILIZACION DEL SISTEMA FINANCIERO",
+            plazo: "0",
+            total: data.totales.importeTotal,
+          },
+        ];
+
+  const paymentRowHeights = pagosList.map(
+    (item) =>
+      Math.max(
+        paymentRowMinHeight,
+        doc.heightOfString(item.formaPago, { width: methodWidth }) + 4
+      )
+  );
+  const table2Height = showPayments
+    ? paymentRowMinHeight + paymentRowHeights.reduce((acc, h) => acc + h, 0) + 10
+    : 0;
+
+  const termsHeight = measureCustomTextBox(doc, leftBoxWidth, "Términos y condiciones", options.companyData?.termsText);
+  const footerHeight = measureCustomTextBox(doc, leftBoxWidth, "Pie de factura", options.companyData?.footerText);
+
+  // --- Medidas: Totales
+  const titlesAndValues = buildTotalsRows(data);
+  const numRows = titlesAndValues.length;
+  const rowHeight = 20;
+  const totalBoxHeightT = numRows * rowHeight;
+
+  const leftBlockHeight =
+    finalInfoBoxHeight +
+    (showPayments ? 14 - 5 + table2Height : 0) +
+    (termsHeight ? 15 + termsHeight : 0) +
+    (footerHeight ? 15 + footerHeight : 0);
+  const columns = [
+    { x: leftX, width: leftBoxWidth, height: leftBlockHeight },
+    { x: rightX, width: rightBoxWidthT, height: totalBoxHeightT },
+  ];
+  const finalBlockHeight = requiredFinalBlockHeight(columns, options);
+
+  let finalTop = tableBottom + 16;
+  if (finalTop + finalBlockHeight > pageBottomOf(doc)) {
+    doc.addPage();
+    finalTop = CONTINUATION_TOP;
+  }
+  const finalBlock = { pageIndex: currentPageIndex(doc), top: finalTop, columns };
+
+  // --- Caja Izquierda 1: Información Adicional
   roundedRect(doc, leftX, finalTop, leftBoxWidth, finalInfoBoxHeight, 6);
 
-  doc
-    .font("Helvetica-Bold")
-    .fontSize(9)
-    .fillColor("#000000")
-    .text(titleText, titleX, finalTop + 10);
+  doc.font("Helvetica-Bold").fontSize(9).fillColor("#000000");
+  const titleW = doc.widthOfString(titleText);
+  const titleX = leftX + (leftBoxWidth - titleW) / 2;
+  doc.text(titleText, titleX, finalTop + 10);
 
   let lineY = finalTop + 28;
   doc.font("Helvetica").fontSize(8).fillColor("#000000");
@@ -610,144 +909,69 @@ export async function renderAlternativeTemplate(
         lineGap: 2,
       });
     }
+    doc.font("Helvetica").fontSize(8);
     lineY += doc.heightOfString(text, { width: infoTextWidth, lineGap: 2 }) + 5;
   });
 
-  // --- Caja Izquierda 2: Forma de Pago (Tabla)
-  const table2Top = finalTop + finalInfoBoxHeight + 14;
-  const colMethod = leftX + 10;
-  const colPlazo = leftX + 10 + leftBoxWidth * 0.6;
-  const colValor = leftX + 10 + leftBoxWidth * 0.8;
-  const methodWidth = leftBoxWidth * 0.6 - 10;
-  const plazoWidth = leftBoxWidth * 0.2 - 15;
-  const valorWidth = leftBoxWidth * 0.2 - 15;
+  let leftContentBottom = finalTop + finalInfoBoxHeight;
+  if (showPayments) {
+    // --- Caja Izquierda 2: Forma de Pago (Tabla)
+    const table2Top = finalTop + finalInfoBoxHeight + 14;
+    const colMethod = leftX + colMethodOffset;
+    const colPlazo = leftX + colPlazoOffset;
+    const colValor = leftX + colValorOffset;
 
-  doc.font("Helvetica-Bold").fontSize(8).fillColor("#000000");
-  doc.text("Forma de pago", colMethod, table2Top, { width: methodWidth });
-  doc.text("Plazo", colPlazo, table2Top, { width: plazoWidth, align: "right" });
-  doc.text("Valor", colValor, table2Top, { width: valorWidth, align: "right" });
+    doc.font("Helvetica-Bold").fontSize(8).fillColor("#000000");
+    doc.text("Forma de pago", colMethod, table2Top, { width: methodWidth });
+    doc.text("Plazo", colPlazo, table2Top, { width: plazoWidth, align: "right" });
+    doc.text("Valor", colValor, table2Top, { width: valorWidth, align: "right" });
 
-  doc
-    .moveTo(leftX + 5, table2Top + 12)
-    .lineTo(leftX + leftBoxWidth - 5, table2Top + 12)
-    .stroke();
+    doc
+      .moveTo(leftX + 5, table2Top + 12)
+      .lineTo(leftX + leftBoxWidth - 5, table2Top + 12)
+      .stroke();
 
-  let row2Y = table2Top + 18;
-  doc.font("Helvetica").fontSize(8).fillColor("#000000");
+    let row2Y = table2Top + 18;
+    doc.font("Helvetica").fontSize(8).fillColor("#000000");
 
-  const pagosList =
-    data.pagos.length > 0
-      ? data.pagos
-      : [
-          {
-            formaPago: "SIN UTILIZACION DEL SISTEMA FINANCIERO",
-            plazo: "0",
-            total: data.totales.importeTotal,
-          },
-        ];
-
-  pagosList.forEach((item) => {
-    doc.text(item.formaPago, colMethod, row2Y, { width: methodWidth });
-    doc.text(item.plazo || "0", colPlazo, row2Y, { width: plazoWidth, align: "right" });
-    doc.text(`$${Number(item.total).toFixed(2)}`, colValor, row2Y, {
-      width: valorWidth,
-      align: "right",
+    pagosList.forEach((item, index) => {
+      doc.text(item.formaPago, colMethod, row2Y, { width: methodWidth });
+      doc.text(item.plazo || "0", colPlazo, row2Y, { width: plazoWidth, align: "right" });
+      doc.text(`$${Number(item.total).toFixed(2)}`, colValor, row2Y, {
+        width: valorWidth,
+        align: "right",
+      });
+      row2Y += paymentRowHeights[index];
     });
-    row2Y += 15;
-  });
 
-  const table2Height = (pagosList.length + 1) * 15 + 10;
-  roundedRect(doc, leftX, table2Top - 5, leftBoxWidth, table2Height, 6);
+    roundedRect(doc, leftX, table2Top - 5, leftBoxWidth, table2Height, 6);
 
-  let leftContentBottom = table2Top + table2Height;
-  if (options.companyData?.termsText) {
+    leftContentBottom = table2Top - 5 + table2Height;
+  }
+  if (termsHeight) {
     leftContentBottom += 15;
-    const termsHeight = drawCustomTextBox(doc, {
+    drawCustomTextBox(doc, {
       x: leftX,
       y: leftContentBottom,
       width: leftBoxWidth,
       title: "Términos y condiciones",
-      text: options.companyData.termsText,
+      text: options.companyData?.termsText,
     });
     leftContentBottom += termsHeight;
   }
 
-  if (options.companyData?.footerText) {
+  if (footerHeight) {
     leftContentBottom += 15;
     drawCustomTextBox(doc, {
       x: leftX,
       y: leftContentBottom,
       width: leftBoxWidth,
       title: "Pie de factura",
-      text: options.companyData.footerText,
+      text: options.companyData?.footerText,
     });
   }
 
   // --- Caja Derecha: Totales
-  const subtotalsMap: Record<string, { label: string; base: number; iva: number }> = {};
-  data.totales.impuestos.forEach((tax) => {
-    const cp = tax.codigoPorcentaje;
-    const base = Number(tax.baseImponible) || 0;
-    const iva = Number(tax.valor) || 0;
-    if (!subtotalsMap[cp]) {
-      subtotalsMap[cp] = { label: tax.label || `Subtotal ${tax.tarifa || ""}%:`, base, iva };
-    } else {
-      subtotalsMap[cp].base += base;
-      subtotalsMap[cp].iva += iva;
-    }
-  });
-
-  const titlesAndValues: Array<{ title: string; val: number }> = [
-    { title: "Subtotal sin impuesto:", val: Number(data.totales.subtotalSinImpuestos) },
-  ];
-
-  if (subtotalsMap["4"]) {
-    titlesAndValues.push({ title: "Subtotal 15%:", val: subtotalsMap["4"].base });
-  } else if (subtotalsMap["2"]) {
-    titlesAndValues.push({ title: "Subtotal 12%:", val: subtotalsMap["2"].base });
-  } else {
-    titlesAndValues.push({ title: "Subtotal 15%:", val: 0 });
-  }
-
-  titlesAndValues.push({
-    title: "Subtotal no objeto de IVA:",
-    val: subtotalsMap["6"] ? subtotalsMap["6"].base : 0,
-  });
-
-  titlesAndValues.push({
-    title: "Subtotal Exento IVA:",
-    val: subtotalsMap["7"] ? subtotalsMap["7"].base : 0,
-  });
-
-  titlesAndValues.push({
-    title: "Descuento:",
-    val: Number(data.totales.totalDescuento),
-  });
-
-  titlesAndValues.push({ title: "ICE:", val: 0 });
-  titlesAndValues.push({ title: "IRBPNR:", val: 0 });
-
-  if (subtotalsMap["4"] && subtotalsMap["4"].iva > 0) {
-    titlesAndValues.push({ title: "IVA 15%:", val: subtotalsMap["4"].iva });
-  } else if (subtotalsMap["2"] && subtotalsMap["2"].iva > 0) {
-    titlesAndValues.push({ title: "IVA 12%:", val: subtotalsMap["2"].iva });
-  } else {
-    titlesAndValues.push({ title: "IVA 15%:", val: 0 });
-  }
-
-  if (Number(data.totales.propina) > 0) {
-    titlesAndValues.push({ title: "Propina:", val: Number(data.totales.propina) });
-  }
-
-  titlesAndValues.push({
-    title: "Valor total:",
-    val: Number(data.totales.importeTotal),
-  });
-
-  const numRows = titlesAndValues.length;
-  const rowHeight = 20;
-  const totalBoxHeightT = numRows * rowHeight;
-
   roundedRect(doc, rightX, finalTop, rightBoxWidthT, totalBoxHeightT, 6);
   doc.fontSize(8).font("Helvetica").fillColor("#000000");
 
@@ -781,6 +1005,8 @@ export async function renderAlternativeTemplate(
       }
     );
   }
+
+  return { finalBlock };
 }
 
 /**

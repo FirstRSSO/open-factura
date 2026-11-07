@@ -2,6 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import forge from "node-forge";
 import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
 
 import {
   generateAccessKey,
@@ -627,5 +628,89 @@ describe("7. Generación de RIDE en PDF (Plantillas Alternativa y Standard)", ()
     // Restaurar por defecto de la librería
     setDefaultRideTemplate("standard");
     assert.strictEqual(getDefaultRideTemplate(), "standard");
+  });
+});
+
+describe("8. RIDE de notas de crédito (04) y débito (05)", () => {
+  const fixture = (name) =>
+    readFileSync(new URL(`./fixtures/${name}.xml`, import.meta.url), "utf8");
+
+  test("Normaliza la nota de crédito: título, comprobante modificado, motivo y sin pagos", async () => {
+    const { normalizeRideData } = await import("../dist/index.mjs");
+    const data = normalizeRideData(fixture("nota-credito"));
+
+    assert.strictEqual(data.tipoComprobante, "NOTA DE CRÉDITO");
+    assert.strictEqual(data.codDoc, "04");
+    assert.deepStrictEqual(data.documentoModificado, {
+      codDoc: "01",
+      tipo: "FACTURA",
+      numero: "001-001-000000001",
+      fechaEmision: "01/08/2026",
+    });
+    assert.strictEqual(data.motivo, "Devolución de mercadería");
+    assert.strictEqual(data.motivos, undefined);
+    assert.strictEqual(data.totales.importeTotal, "112.00");
+    assert.strictEqual(data.pagos.length, 0);
+    // El detalle de la NC usa codigoInterno en lugar de codigoPrincipal.
+    assert.strictEqual(data.items[0].code, "PROD001");
+    // totalConImpuestos de la NC no trae tarifa: se deduce del código.
+    assert.strictEqual(data.totales.impuestos[0].tarifa, "15");
+  });
+
+  test("Normaliza la nota de débito: motivos, impuestos, valor total y pagos", async () => {
+    const { normalizeRideData } = await import("../dist/index.mjs");
+    const data = normalizeRideData(fixture("nota-debito"));
+
+    assert.strictEqual(data.tipoComprobante, "NOTA DE DÉBITO");
+    assert.strictEqual(data.documentoModificado.numero, "001-001-000000001");
+    assert.strictEqual(data.motivo, undefined);
+    assert.deepStrictEqual(data.motivos, [{ razon: "Intereses por mora", valor: "100.00" }]);
+    assert.strictEqual(data.items.length, 0);
+    assert.strictEqual(data.totales.impuestos[0].valor, "12.00");
+    assert.strictEqual(data.totales.importeTotal, "112.00");
+    assert.strictEqual(data.pagos[0].total, "112.00");
+  });
+
+  test("Una factura no lleva datos de nota", async () => {
+    const { normalizeRideData } = await import("../dist/index.mjs");
+    const data = normalizeRideData({
+      factura: { infoTributaria: { codDoc: "01" }, infoFactura: { importeTotal: "10.00" } },
+    });
+    assert.strictEqual(data.tipoComprobante, "FACTURA");
+    assert.strictEqual(data.documentoModificado, undefined);
+    assert.strictEqual(data.motivos, undefined);
+  });
+
+  for (const name of ["nota-credito", "nota-debito"]) {
+    for (const template of ["standard", "alternative"]) {
+      test(`Genera el PDF de ${name} con la plantilla ${template}`, async () => {
+        const { generateRidePdf, renderAlternativeTemplate, renderStandardTemplate } =
+          await import("../dist/index.mjs");
+        const pdf = await generateRidePdf(fixture(name), { template });
+        assert.strictEqual(pdf.subarray(0, 5).toString(), "%PDF-");
+
+        // El bloque final sigue informando su posición (lo usan quienes pintan encima).
+        const render = template === "standard" ? renderStandardTemplate : renderAlternativeTemplate;
+        const { normalizeRideData } = await import("../dist/index.mjs");
+        const PDFDocument = require("pdfkit");
+        const doc = new PDFDocument({ size: "A4", margin: 20 });
+        const layout = await render(doc, normalizeRideData(fixture(name)), {});
+        doc.end();
+        assert.strictEqual(layout.finalBlock.pageIndex, 0);
+        assert.ok(layout.finalBlock.top > 0);
+      });
+    }
+  }
+
+  test("La NC en la plantilla alternativa no reserva alto para «Forma de pago»", async () => {
+    const { normalizeRideData, renderAlternativeTemplate } = await import("../dist/index.mjs");
+    const PDFDocument = require("pdfkit");
+    const leftHeight = async (name) => {
+      const doc = new PDFDocument({ size: "A4", margin: 20 });
+      const layout = await renderAlternativeTemplate(doc, normalizeRideData(fixture(name)), {});
+      doc.end();
+      return layout.finalBlock.columns[0].height;
+    };
+    assert.ok((await leftHeight("nota-credito")) < (await leftHeight("nota-debito")));
   });
 });

@@ -220,6 +220,8 @@ const signedLiquidation = signPurchaseLiquidationXml(liquidationXml, p12Buffer, 
 
 La librería incluye un motor nativo y ligero de generación de PDF RIDE (basado en `pdfkit` y `bwip-js`), que genera el código de barras oficial Code128 de 49 dígitos sin requerir Chromium/Puppeteer ni navegadores pesados.
 
+Acepta facturas (01), liquidaciones de compra (03), **notas de crédito (04)** y **notas de débito (05)**, como objeto o como XML. En las notas, el RIDE muestra el comprobante que se modifica y su fecha de emisión; la nota de crédito añade la razón de la modificación y omite la forma de pago, y la de débito reemplaza la tabla de productos por la razón y el valor de cada motivo.
+
 Soporta dos estilos completos y listos para producción:
 1. **`'standard'`**: Estilo predeterminado de la librería, moderno y limpio con banner superior institucional y paleta configurable.
 2. **`'alternative'`** (o **`'alternativo'`**): Estilo alternativo profesional, con cajas redondeadas (radio 10), banner superior `#0d6efd`, alturas sincronizadas, datos del comprador a dos columnas, tabla sin bordes internos y caja de totales con división 60/40.
